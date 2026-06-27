@@ -32,7 +32,7 @@ export default function App() {
   // Nuevo estado para el mes que se está visualizando
   const [viewMonth, setViewMonth] = useState<string>(new Date().toISOString().slice(0, 7)); // 'YYYY-MM'
   
-  const [monthlyIncome, setMonthlyIncome] = useState<number>(2000);
+  const [monthlyIncome, setMonthlyIncome] = useState<number>(1500000);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
   
   // Reloj simulador de la barra de estado móvil
@@ -85,8 +85,8 @@ export default function App() {
           setMonthlyIncome(parseFloat(value));
         } else {
           // Valor por defecto inicial
-          setMonthlyIncome(2000);
-          await Preferences.set({ key: incomeKey, value: '2000' });
+          setMonthlyIncome(1500000);
+          await Preferences.set({ key: incomeKey, value: '1500000' });
         }
       } catch (e) {
         // Fallback robusto a localStorage por si acaso
@@ -94,8 +94,8 @@ export default function App() {
         if (saved) {
           setMonthlyIncome(parseFloat(saved));
         } else {
-          setMonthlyIncome(2000);
-          localStorage.setItem(incomeKey, '2000');
+          setMonthlyIncome(1500000);
+          localStorage.setItem(incomeKey, '1500000');
         }
       }
     };
@@ -134,16 +134,22 @@ export default function App() {
     try {
       const storedExpenses = localStorage.getItem('expenses');
       if (storedExpenses) {
-        setExpenses(JSON.parse(storedExpenses));
+        const parsed = JSON.parse(storedExpenses);
+        // Si contiene los registros semilla iniciales (que empiezan con 'exp-'), limpiamos para dejar la app vacía
+        if (Array.isArray(parsed) && parsed.some((exp: Expense) => exp.id && exp.id.startsWith('exp-'))) {
+          setExpenses([]);
+          localStorage.setItem('expenses', JSON.stringify([]));
+        } else {
+          setExpenses(parsed);
+        }
       } else {
-        // Generar gastos semilla por defecto si no hay nada guardado
-        const seedExpenses = INITIAL_EXPENSES();
-        setExpenses(seedExpenses);
-        localStorage.setItem('expenses', JSON.stringify(seedExpenses));
+        // Por defecto arranca completamente vacía
+        setExpenses([]);
+        localStorage.setItem('expenses', JSON.stringify([]));
       }
     } catch (e) {
       console.error('Error al leer de localStorage:', e);
-      setExpenses(INITIAL_EXPENSES());
+      setExpenses([]);
     }
   }, []);
 
@@ -169,6 +175,7 @@ export default function App() {
           : exp
       );
       setExpenseToEdit(null); // Resetear edición
+      triggerNotification('¡Gasto actualizado con éxito!', 'success');
     } else {
       // Crear nuevo registro
       const newExpense: Expense = {
@@ -179,6 +186,7 @@ export default function App() {
         description: formData.description
       };
       updated = [newExpense, ...expenses];
+      triggerNotification('¡Gasto registrado con éxito!', 'success');
     }
 
     saveExpensesToStorage(updated);
@@ -190,6 +198,7 @@ export default function App() {
   const handleDeleteExpense = (id: string) => {
     const updated = expenses.filter(exp => exp.id !== id);
     saveExpensesToStorage(updated);
+    triggerNotification('El registro de gasto fue eliminado.', 'info');
     
     // Si estábamos editando el gasto eliminado, cancelar edición
     if (expenseToEdit && expenseToEdit.id === id) {
@@ -220,8 +229,8 @@ export default function App() {
         }`}
         id="smartphone-bezel"
       >
-        {/* Barra de Estado Móvil Simulada (Solo se ve realista) */}
-        <div className={`px-6 pt-3 pb-2 flex justify-between items-center text-[11px] font-black tracking-tight select-none z-10 shrink-0 transition-colors duration-300 ${isDark ? 'bg-slate-900' : 'bg-slate-50'}`} id="simulated-status-bar">
+        {/* Barra de Estado Móvil Simulada (Solo se ve en PC/Escritorio) */}
+        <div className={`hidden sm:flex px-6 pt-3 pb-2 justify-between items-center text-[11px] font-black tracking-tight select-none z-10 shrink-0 transition-colors duration-300 ${isDark ? 'bg-slate-900' : 'bg-slate-50'}`} id="simulated-status-bar">
           <div className="flex items-center gap-1">
             <span className={`font-extrabold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>{time}</span>
           </div>
@@ -236,8 +245,8 @@ export default function App() {
 
         {/* Notificación Toast del Sistema */}
         {notification && (
-          <div className={`absolute top-[48px] left-4 right-4 z-50 px-4 py-3 rounded-2xl shadow-xl flex items-center gap-2.5 animate-fade-in border text-xs transition-colors duration-300 ${
-            isDark ? 'bg-slate-950 text-white border-slate-800' : 'bg-white text-slate-800 border-slate-200'
+          <div className={`absolute top-[calc(1rem+env(safe-area-inset-top,0px))] sm:top-[48px] left-4 right-4 z-50 px-4 py-3 rounded-2xl shadow-xl flex items-center gap-2.5 animate-fade-in border text-xs transition-colors duration-300 ${
+            isDark ? 'bg-slate-950 text-white border-slate-800 shadow-black/60' : 'bg-white text-slate-800 border-slate-200 shadow-slate-200/40'
           }`}>
             <CategoryIcon 
               name={notification.type === 'success' ? 'Sparkles' : 'Info'} 
@@ -252,7 +261,7 @@ export default function App() {
         )}
 
         {/* Cabecera de la Aplicación */}
-        <header className={`px-6 py-4 flex justify-between items-center border-b shrink-0 transition-colors duration-300 ${isDark ? 'bg-slate-900 border-slate-800/80' : 'bg-slate-50 border-slate-100/60'}`} id="app-header">
+        <header className={`px-6 pt-[calc(1rem+env(safe-area-inset-top,0px))] sm:pt-4 pb-4 flex justify-between items-center border-b shrink-0 transition-colors duration-300 ${isDark ? 'bg-slate-900 border-slate-800/80' : 'bg-slate-50 border-slate-100/60'}`} id="app-header">
           <div className="flex items-center gap-2">
             <div className="p-2 bg-emerald-600 text-white rounded-2xl shadow-sm">
               <CategoryIcon name="DollarSign" size={16} />
@@ -277,7 +286,7 @@ export default function App() {
         </header>
 
         {/* Cuerpo Principal Scrollable */}
-        <main className="flex-1 overflow-y-auto px-5 py-4 pb-24 space-y-4" id="app-body-content">
+        <main className="flex-1 overflow-y-auto px-5 py-4 pb-[calc(5.5rem+env(safe-area-inset-bottom,0px))] sm:pb-24 space-y-4" id="app-body-content">
           {currentTab === 'dashboard' && (
             <div className="animate-fade-in space-y-4">
               <Dashboard 
@@ -334,7 +343,7 @@ export default function App() {
 
         {/* Barra de Navegación Inferior */}
         <nav 
-          className={`absolute bottom-0 left-0 right-0 border-t px-6 py-3 flex justify-around items-center z-20 shrink-0 transition-colors duration-300 ${
+          className={`absolute bottom-0 left-0 right-0 border-t px-6 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] sm:pb-3 flex justify-around items-center z-20 shrink-0 transition-colors duration-300 ${
             isDark 
               ? 'bg-slate-900/95 backdrop-blur-md border-slate-800/80 shadow-[0_-4px_16px_rgba(0,0,0,0.2)]' 
               : 'bg-white/95 backdrop-blur-md border-slate-100 shadow-[0_-4px_16px_rgba(0,0,0,0.03)]'

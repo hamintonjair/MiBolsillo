@@ -97,8 +97,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
     .filter(cat => cat.spent > 0)
     .sort((a, b) => b.spent - a.spent);
 
-  // Presupuesto Total vs Consumido
-  const totalMonthlyBudget = CATEGORIES.reduce((sum, cat) => sum + (cat.budget || 0), 0);
+  // Presupuesto Total vs Consumido (Sincronizado con el ingreso mensual ingresado)
+  const totalMonthlyBudget = monthlyIncome > 0 ? monthlyIncome : CATEGORIES.reduce((sum, cat) => sum + (cat.budget || 0), 0);
   const totalMonthlySpent = expenses
     .filter(exp => exp.date.startsWith(currentMonthYear))
     .reduce((sum, exp) => sum + exp.amount, 0);
