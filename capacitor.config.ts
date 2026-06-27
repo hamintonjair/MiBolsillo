@@ -1,7 +1,7 @@
 import { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.mibolsillo.app',
+  appId: 'com.hamintonjair.mibolsillo',
   appName: 'MiBolsillo',
   webDir: 'dist'
 };
