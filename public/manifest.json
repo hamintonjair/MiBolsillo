@@ -1,0 +1,24 @@
+{
+  "short_name": "MiBolsillo",
+  "name": "MiBolsillo - Control de Gastos",
+  "description": "Una aplicación móvil de contabilidad personal para el registro, control y análisis offline de tus gastos diarios.",
+  "icons": [
+    {
+      "src": "/icon-512.jpg",
+      "type": "image/jpeg",
+      "sizes": "192x192",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.jpg",
+      "type": "image/jpeg",
+      "sizes": "512x512",
+      "purpose": "any"
+    }
+  ],
+  "start_url": ".",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "display": "standalone",
+  "orientation": "portrait"
+}

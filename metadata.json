@@ -1,0 +1,6 @@
+{
+  "name": "MiBolsillo",
+  "description": "Una aplicación móvil de contabilidad personal para el registro, control y análisis offline de tus gastos diarios.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
