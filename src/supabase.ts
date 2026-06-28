@@ -59,8 +59,12 @@ ALTER TABLE public.expenses ADD COLUMN IF NOT EXISTS profile_id TEXT DEFAULT 'Pr
 CREATE TABLE IF NOT EXISTS public.monthly_income (
     month TEXT PRIMARY KEY, -- Formato 'profile_id:month' o 'YYYY-MM' (retrocompatible)
     income NUMERIC NOT NULL,
+    profile_id TEXT DEFAULT 'Principal', -- Identificador del perfil/usuario o email
     created_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- Asegurar que la columna profile_id exista si la tabla ya había sido creada anteriormente
+ALTER TABLE public.monthly_income ADD COLUMN IF NOT EXISTS profile_id TEXT DEFAULT 'Principal';
 
 -- 3. Crear tabla de Usuarios (custom_users) para evitar problemas de confirmación de email con Supabase Auth
 CREATE TABLE IF NOT EXISTS public.custom_users (
@@ -341,12 +345,20 @@ export async function saveIncomeToSupabase(month: string, income: number, profil
     return { success: false, error: 'Supabase no configurado' };
   }
   try {
+    console.log('--- DEBUG: saveIncomeToSupabase called ---', { month, income, profileId });
     const key = `${profileId}:${month}`;
+    
+    // Si estamos guardando con un email real, intentamos limpiar registros antiguos con la misma fecha pero clave 'Principal'
+    if (profileId !== 'Principal') {
+      await supabase.from('monthly_income').delete().eq('month', month);
+    }
+
     const { error } = await supabase
       .from('monthly_income')
       .upsert({
         month: key,
-        income
+        income,
+        profile_id: profileId
       });
 
     if (error) {
