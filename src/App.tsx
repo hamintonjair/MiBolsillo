@@ -462,7 +462,7 @@ export default function App() {
     <div className={`min-h-screen flex flex-col items-center justify-center py-0 sm:py-8 font-sans transition-colors duration-300 ${isDark ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-800'}`} id="main-app-container">
       {/* Contenedor Mock de Smartphone Premium */}
       <div 
-        className={`w-full h-[100dvh] sm:h-[calc(100vh-48px)] sm:max-h-[820px] sm:min-h-[580px] sm:rounded-[40px] sm:shadow-2xl sm:border-[8px] flex flex-col overflow-hidden relative transition-all duration-300 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] ${
+        className={`w-full h-[100dvh] sm:h-[calc(100vh-48px)] sm:max-h-[820px] sm:min-h-[580px] sm:rounded-[40px] sm:shadow-2xl sm:border-[8px] flex flex-col overflow-hidden relative transition-all duration-300 pb-[env(safe-area-inset-bottom)] ${
           isDark 
             ? 'bg-slate-900 sm:border-slate-950 shadow-black/80 text-white' 
             : 'bg-slate-50 sm:border-slate-900 shadow-slate-200/50 text-slate-800'
@@ -839,7 +839,7 @@ export default function App() {
                 <div className="text-xs leading-relaxed">
                   {dbStatus.loading && <p className="text-slate-400">Comprobando la disponibilidad del servidor de Supabase...</p>}
                   {!dbStatus.loading && dbStatus.connected && dbStatus.tablesExist && (
-                    <p className="text-emerald-600 dark:text-emerald-400 font-bold">
+                    <p className={`${isDark ? 'text-white' : 'text-emerald-600'} font-bold`}>
                       Tu aplicación está conectada con éxito. Todos los gastos y presupuestos se están sincronizando en tiempo real con Supabase.
                     </p>
                   )}
