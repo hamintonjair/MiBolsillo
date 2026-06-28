@@ -462,7 +462,7 @@ export default function App() {
     <div className={`min-h-screen flex flex-col items-center justify-center py-0 sm:py-8 font-sans transition-colors duration-300 ${isDark ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-800'}`} id="main-app-container">
       {/* Contenedor Mock de Smartphone Premium */}
       <div 
-        className={`w-full h-screen sm:h-[calc(100vh-48px)] sm:max-h-[820px] sm:min-h-[580px] sm:rounded-[40px] sm:shadow-2xl sm:border-[8px] flex flex-col overflow-hidden relative transition-all duration-300 ${
+        className={`w-full h-[100dvh] sm:h-[calc(100vh-48px)] sm:max-h-[820px] sm:min-h-[580px] sm:rounded-[40px] sm:shadow-2xl sm:border-[8px] flex flex-col overflow-hidden relative transition-all duration-300 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] ${
           isDark 
             ? 'bg-slate-900 sm:border-slate-950 shadow-black/80 text-white' 
             : 'bg-slate-50 sm:border-slate-900 shadow-slate-200/50 text-slate-800'
@@ -630,7 +630,7 @@ export default function App() {
         ) : (
           <>
             {/* Cabecera de la Aplicación */}
-            <header className={`px-6 pt-[calc(1rem+env(safe-area-inset-top,0px))] sm:pt-4 pb-4 flex justify-between items-center border-b shrink-0 transition-colors duration-300 ${isDark ? 'bg-slate-900 border-slate-800/80' : 'bg-slate-50 border-slate-100/60'}`} id="app-header">
+            <header className={`px-6 pt-4 sm:pt-4 pb-4 flex justify-between items-center border-b shrink-0 transition-colors duration-300 ${isDark ? 'bg-slate-900 border-slate-800/80' : 'bg-slate-50 border-slate-100/60'}`} id="app-header">
               <div className="flex items-center gap-2">
                 <div className="p-2 bg-emerald-600 text-white rounded-2xl shadow-sm">
                   <CategoryIcon name="DollarSign" size={16} />
