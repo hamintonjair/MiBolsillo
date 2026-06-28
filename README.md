@@ -8,7 +8,9 @@ La aplicación simula una interfaz de smartphone premium en escritorio, adaptán
 
 ## ✨ Características Principales
 
-*   **🌐 Offline-First con Respaldo en la Nube (Persistencia Híbrida)**: Tus datos financieros se guardan localmente para accesos rápidos y sin internet, y se sincronizan de manera segura en tu base de datos de **Supabase** cuando tienes conexión.
+*   **🔒 Autenticación Segura y Cuenta en la Nube (Supabase Auth)**: ¡NUEVO! Cada usuario tiene su perfil independiente. Puedes registrarse e iniciar sesión de forma segura con tu correo electrónico y contraseña. Al iniciar sesión, todos tus bolsillos, presupuestos e historial financiero se vinculan de manera única y segura a tu ID de usuario de Supabase, aislándolo de otros usuarios.
+*   **👥 Gestión de Sub-Bolsillos Independientes**: Permite crear múltiples perfiles o sub-bolsillos (por ejemplo: "Principal", "Trabajo", "Vacaciones", "Familia") dentro de tu misma cuenta. Los ingresos y los gastos están 100% aislados e independientes por cada sub-bolsillo para organizar diferentes presupuestos cotidianos.
+*   **🌐 Offline-First y Modo Invitado (Persistencia Híbrida)**: Si lo prefieres, puedes continuar usando la app sin cuenta en modo invitado local. Tus datos financieros se guardan localmente para accesos rápidos sin internet, y se sincronizan de manera segura en tu base de datos de **Supabase** al iniciar sesión o registrarte.
 *   **📊 Análisis y Visualización**: Gráficos interactivos y dinámicos desarrollados con Recharts que desglosan tus consumos por categorías para un mejor análisis de tus hábitos de consumo.
 *   **📂 Gestión de Transacciones**: Registra, edita, elimina y categoriza tus gastos rápidamente con formularios interactivos.
 *   **💰 Control de Ingreso Mensual**: Gestiona tu ingreso mensual (Salario), inicializado en `0` por defecto para que registres tu presupuesto real desde el primer día.
@@ -47,7 +49,7 @@ Para facilitar la publicación y el registro de la app en plataformas como **APK
 
 ## 🚀 Configuración y Conexión de Supabase
 
-Para habilitar la persistencia en la nube, debes crear un proyecto en **Supabase** y configurar las siguientes variables de entorno.
+Para habilitar la persistencia en la nube, debes crear un proyecto en **Supabase**, configurar las variables de entorno, verificar el servicio de autenticación e importar las tablas SQL.
 
 ### 1. Variables de Entorno (Archivo `.env`)
 Crea un archivo `.env` en la raíz del proyecto basándote en `.env.example`:
@@ -57,34 +59,69 @@ VITE_SUPABASE_URL=https://tu-proyecto.supabase.co
 VITE_SUPABASE_ANON_KEY=tu-anon-key-de-supabase
 ```
 
-### 2. Creación de Tablas (SQL Script)
-Ejecuta el siguiente script en el **SQL Editor** de tu consola de Supabase para habilitar las tablas necesarias:
+### 2. Sistema de Autenticación Personalizado (Bypass de Confirmación de Email)
+Para evitar que tus usuarios queden atascados esperando un correo de confirmación de Supabase Auth, la aplicación utiliza un **sistema de cuentas basado en una tabla personalizada (`custom_users`)**. 
+Esto permite que:
+* El registro e inicio de sesión sean inmediatos y 100% operativos desde el primer segundo.
+* Las sesiones se almacenen de forma segura y persistente en el dispositivo del usuario.
+* No tengas que configurar ningún proveedor de correo ni desactivar la confirmación de email en la pestaña de Auth de tu consola de Supabase.
+
+### 3. Creación de Tablas (SQL Script)
+Ejecuta el siguiente script en el **SQL Editor** de tu consola de Supabase (SQL Editor -> New Query) para habilitar todas las tablas y políticas requeridas:
 
 ```sql
--- Tabla para registrar los gastos
-CREATE TABLE IF NOT EXISTS expenses (
-  id TEXT PRIMARY KEY,
-  amount NUMERIC NOT NULL,
-  category TEXT NOT NULL,
-  date DATE NOT NULL,
-  description TEXT NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+-- 1. Crear tabla de Gastos (expenses) con columna profile_id para independizar perfiles
+CREATE TABLE IF NOT EXISTS public.expenses (
+    id TEXT PRIMARY KEY,
+    amount NUMERIC NOT NULL,
+    category TEXT NOT NULL,
+    date TEXT NOT NULL,
+    description TEXT,
+    profile_id TEXT DEFAULT 'Principal', -- Identificador del perfil/usuario
+    created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Tabla para guardar el presupuesto/ingreso mensual
-CREATE TABLE IF NOT EXISTS monthly_income (
-  month TEXT PRIMARY KEY, -- Formato 'YYYY-MM'
-  income NUMERIC NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+-- Asegurar que la columna profile_id exista si la tabla ya había sido creada anteriormente
+ALTER TABLE public.expenses ADD COLUMN IF NOT EXISTS profile_id TEXT DEFAULT 'Principal';
+
+-- 2. Crear tabla de Ingresos Mensuales (monthly_income)
+-- El campo month almacenará la combinación 'profile_id:month' para asegurar perfiles independientes
+CREATE TABLE IF NOT EXISTS public.monthly_income (
+    month TEXT PRIMARY KEY, -- Formato 'profile_id:month' o 'YYYY-MM' (retrocompatible)
+    income NUMERIC NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Habilitar acceso de lectura y escritura para cualquiera (para modo desarrollo/demostración simple)
--- Nota: En producción, puedes proteger estas tablas con Row Level Security (RLS)
-ALTER TABLE expenses ENABLE ROW LEVEL SECURITY;
-ALTER TABLE monthly_income ENABLE ROW LEVEL SECURITY;
+-- 3. Crear tabla de Usuarios (custom_users) para el sistema de cuentas sin confirmación de email
+CREATE TABLE IF NOT EXISTS public.custom_users (
+    email TEXT PRIMARY KEY,
+    password TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
 
-CREATE POLICY "Permitir todo acceso público a gastos" ON expenses FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Permitir todo acceso público a ingresos" ON monthly_income FOR ALL USING (true) WITH CHECK (true);
+-- 4. Habilitar el acceso público por medio de políticas RLS
+ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.monthly_income ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.custom_users ENABLE ROW LEVEL SECURITY;
+
+-- Limpiar políticas anteriores si ya existían para evitar errores de duplicación
+DROP POLICY IF EXISTS "Permitir todo a usuarios anonimos en expenses" ON public.expenses;
+CREATE POLICY "Permitir todo a usuarios anonimos en expenses" 
+ON public.expenses FOR ALL 
+USING (true) 
+WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Permitir todo a usuarios anonimos en monthly_income" ON public.monthly_income;
+CREATE POLICY "Permitir todo a usuarios anonimos en monthly_income" 
+ON public.monthly_income FOR ALL 
+USING (true) 
+WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Permitir todo a usuarios anonimos en custom_users" ON public.custom_users;
+CREATE POLICY "Permitir todo a usuarios anonimos en custom_users" 
+ON public.custom_users FOR ALL 
+USING (true) 
+WITH CHECK (true);
 ```
 
 ---

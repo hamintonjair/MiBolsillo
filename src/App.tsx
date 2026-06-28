@@ -18,7 +18,14 @@ import {
   deleteExpenseFromSupabase, 
   fetchIncomeFromSupabase, 
   saveIncomeToSupabase,
-  SQL_CREATION_SCRIPT 
+  SQL_CREATION_SCRIPT,
+  signUpUser,
+  signInUser,
+  signOutUser,
+  getCurrentUser,
+  updateUserEmail,
+  deleteUserAccount,
+  updateUserPassword
 } from './supabase';
 
 export default function App() {
@@ -36,7 +43,7 @@ export default function App() {
   // Nuevo estado para el mes que se está visualizando
   const [viewMonth, setViewMonth] = useState<string>(new Date().toISOString().slice(0, 7)); // 'YYYY-MM'
   
-  const [monthlyIncome, setMonthlyIncome] = useState<number>(1500000);
+  const [monthlyIncome, setMonthlyIncome] = useState<number>(0);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
   
   // Reloj simulador de la barra de estado móvil
@@ -56,6 +63,32 @@ export default function App() {
 
   const [showDbModal, setShowDbModal] = useState<boolean>(false);
 
+  // Estado para el perfil activo (ahora único por usuario)
+  const [activeProfile, setActiveProfile] = useState<string>('Principal');
+
+  // Estados de autenticación en Supabase
+  const [sessionUser, setSessionUser] = useState<any>(null);
+  const [authEmail, setAuthEmail] = useState<string>('');
+  const [authPassword, setAuthPassword] = useState<string>('');
+  const [isRegisterMode, setIsRegisterMode] = useState<boolean>(false);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(false);
+  const [showAuthGate, setShowAuthGate] = useState<boolean>(false);
+  const [showPassword, setShowPassword] = useState<boolean>(false);
+  const [showProfileModal, setShowProfileModal] = useState<boolean>(false);
+  const [newEmailInput, setNewEmailInput] = useState<string>('');
+  const [isUpdatingEmail, setIsUpdatingEmail] = useState<boolean>(false);
+  const [newPasswordUpdateInput, setNewPasswordUpdateInput] = useState<string>('');
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState<boolean>(false);
+  const [showUpdatePassword, setShowUpdatePassword] = useState<boolean>(false);
+
+  // Estado para modal de confirmación premium en la app
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
+
   // Trigger custom in-app notification
   const triggerNotification = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
     setNotification({ message, type });
@@ -64,7 +97,7 @@ export default function App() {
     }, 4500);
   };
 
-  // Función para comprobar la conexión a Supabase
+  // Función para comprobar la conexión a Supabase y obtener sesión activa
   const checkSupabase = async () => {
     setDbStatus(prev => ({ ...prev, loading: true }));
     const result = await testSupabaseConnection();
@@ -74,7 +107,156 @@ export default function App() {
       error: result.error,
       loading: false
     });
+
+    if (result.success && result.tablesExist) {
+      const { user } = await getCurrentUser();
+      if (user) {
+        setSessionUser(user);
+        setActiveProfile(user.email || 'Principal');
+      } else {
+        setShowAuthGate(true);
+      }
+    }
     return result;
+  };
+
+  // Manejadores de Autenticación de Supabase
+  const handleSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const email = authEmail.trim();
+    const password = authPassword.trim();
+    if (!email || !password) {
+      triggerNotification('Por favor, ingresa un correo y contraseña.', 'error');
+      return;
+    }
+    if (password.length < 6) {
+      triggerNotification('La contraseña debe tener al menos 6 caracteres.', 'error');
+      return;
+    }
+
+    setIsAuthLoading(true);
+    const { success, user, error } = await signUpUser(email, password);
+    setIsAuthLoading(false);
+
+    if (success) {
+      triggerNotification('¡Cuenta creada e inicio de sesión exitoso!', 'success');
+      setSessionUser(user);
+      setActiveProfile(email);
+      setShowAuthGate(false);
+      setAuthEmail('');
+      setAuthPassword('');
+    } else {
+      triggerNotification(error || 'Error al crear la cuenta.', 'error');
+    }
+  };
+
+  const handleSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const email = authEmail.trim();
+    const password = authPassword.trim();
+    if (!email || !password) {
+      triggerNotification('Por favor, ingresa correo y contraseña.', 'error');
+      return;
+    }
+
+    setIsAuthLoading(true);
+    const { success, user, error } = await signInUser(email, password);
+    setIsAuthLoading(false);
+
+    if (success) {
+      triggerNotification('¡Sesión iniciada con éxito!', 'success');
+      setSessionUser(user);
+      setActiveProfile(email);
+      setShowAuthGate(false);
+      setAuthEmail('');
+      setAuthPassword('');
+    } else {
+      triggerNotification(error || 'Credenciales incorrectas.', 'error');
+    }
+  };
+
+  const handleSignOut = async () => {
+    setIsAuthLoading(true);
+    const { success, error } = await signOutUser();
+    setIsAuthLoading(false);
+    if (success) {
+      setSessionUser(null);
+      setActiveProfile('Principal');
+      triggerNotification('Sesión cerrada correctamente.', 'info');
+      setShowProfileModal(false);
+      setShowAuthGate(true);
+    } else {
+      triggerNotification(error || 'Error al cerrar sesión.', 'error');
+    }
+  };
+
+  const handleUpdateEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sessionUser || !newEmailInput.trim()) return;
+    
+    setIsUpdatingEmail(true);
+    const { success, error } = await updateUserEmail(sessionUser.email, newEmailInput.trim());
+    setIsUpdatingEmail(false);
+    
+    if (success) {
+      triggerNotification('Correo actualizado con éxito.', 'success');
+      setSessionUser({ email: newEmailInput.trim() });
+      setActiveProfile(newEmailInput.trim());
+      setNewEmailInput('');
+    } else {
+      triggerNotification(error || 'Error al actualizar el correo.', 'error');
+    }
+  };
+
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sessionUser || !newPasswordUpdateInput.trim()) return;
+
+    if (newPasswordUpdateInput.trim().length < 6) {
+      triggerNotification('La contraseña debe tener al menos 6 caracteres.', 'error');
+      return;
+    }
+    
+    setIsUpdatingPassword(true);
+    const { success, error } = await updateUserPassword(sessionUser.email, newPasswordUpdateInput.trim());
+    setIsUpdatingPassword(false);
+    
+    if (success) {
+      triggerNotification('Contraseña actualizada con éxito.', 'success');
+      setNewPasswordUpdateInput('');
+      setShowUpdatePassword(false);
+    } else {
+      triggerNotification(error || 'Error al actualizar la contraseña.', 'error');
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!sessionUser) return;
+    
+    setConfirmModal({
+      isOpen: true,
+      title: '¡ADVERTENCIA CRÍTICA!',
+      message: 'Esta acción es permanente e irreversible. Al confirmar se eliminarán: \n\n • Todo tu historial de gastos. \n • Todos tus registros de ingresos. \n • Tu cuenta y acceso sincronizado. \n\n ¿Estás absolutamente seguro de que deseas continuar?',
+      onConfirm: async () => {
+        const { success, error } = await deleteUserAccount(sessionUser.email);
+        if (success) {
+          triggerNotification('Cuenta eliminada correctamente.', 'info');
+          setSessionUser(null);
+          setActiveProfile('Principal');
+          setShowProfileModal(false);
+          setShowAuthGate(true);
+        } else {
+          triggerNotification(error || 'Error al eliminar la cuenta.', 'error');
+        }
+      }
+    });
+  };
+
+  const handleContinueAsGuest = () => {
+    setSessionUser(null);
+    setActiveProfile('Principal');
+    setShowAuthGate(false);
+    triggerNotification('Usando la aplicación en Modo Local (Sin sincronización).', 'info');
   };
 
   useEffect(() => {
@@ -125,7 +307,7 @@ export default function App() {
   useEffect(() => {
     const loadIncome = async () => {
       if (dbStatus.connected && dbStatus.tablesExist) {
-        const { income, error } = await fetchIncomeFromSupabase(viewMonth);
+        const { income, error } = await fetchIncomeFromSupabase(viewMonth, activeProfile);
         if (income !== null) {
           setMonthlyIncome(income);
         } else {
@@ -137,7 +319,7 @@ export default function App() {
       }
     };
     loadIncome();
-  }, [viewMonth, dbStatus.connected, dbStatus.tablesExist]);
+  }, [viewMonth, activeProfile, dbStatus.connected, dbStatus.tablesExist]);
 
   // Función para actualizar y persistir los ingresos mensuales en la nube
   const handleUpdateIncome = async (newIncome: number) => {
@@ -150,7 +332,7 @@ export default function App() {
       return;
     }
 
-    const { success, error } = await saveIncomeToSupabase(viewMonth, newIncome);
+    const { success, error } = await saveIncomeToSupabase(viewMonth, newIncome, activeProfile);
     if (success) {
       setMonthlyIncome(newIncome);
       triggerNotification('¡Ingreso mensual guardado con éxito!', 'success');
@@ -179,7 +361,7 @@ export default function App() {
   // Cargar datos iniciales de Supabase
   const loadExpensesData = async () => {
     if (dbStatus.connected && dbStatus.tablesExist) {
-      const { data, error } = await fetchExpensesFromSupabase();
+      const { data, error } = await fetchExpensesFromSupabase(activeProfile);
       if (data) {
         setExpenses(data);
         return;
@@ -195,16 +377,7 @@ export default function App() {
     if (!dbStatus.loading) {
       loadExpensesData();
     }
-  }, [dbStatus.loading, dbStatus.connected, dbStatus.tablesExist]);
-
-  // Limpiar todo almacenamiento local para garantizar que no queden registros ni residuos
-  useEffect(() => {
-    try {
-      localStorage.clear();
-    } catch (e) {
-      console.error('Error clearing localStorage:', e);
-    }
-  }, []);
+  }, [dbStatus.loading, dbStatus.connected, dbStatus.tablesExist, activeProfile]);
 
   // Acción para crear o actualizar un registro en la nube
   const handleSaveExpense = async (formData: Omit<Expense, 'id'> & { id?: string }) => {
@@ -226,7 +399,7 @@ export default function App() {
       description: formData.description
     };
 
-    const { success, error } = await saveExpenseToSupabase(targetExpense);
+    const { success, error } = await saveExpenseToSupabase(targetExpense, activeProfile);
     if (success) {
       if (isEdit) {
         setExpenses(expenses.map(exp => exp.id === targetExpense.id ? targetExpense : exp));
@@ -327,59 +500,213 @@ export default function App() {
           </div>
         )}
 
-        {/* Cabecera de la Aplicación */}
-        <header className={`px-6 pt-[calc(1rem+env(safe-area-inset-top,0px))] sm:pt-4 pb-4 flex justify-between items-center border-b shrink-0 transition-colors duration-300 ${isDark ? 'bg-slate-900 border-slate-800/80' : 'bg-slate-50 border-slate-100/60'}`} id="app-header">
-          <div className="flex items-center gap-2">
-            <div className="p-2 bg-emerald-600 text-white rounded-2xl shadow-sm">
-              <CategoryIcon name="DollarSign" size={16} />
+        {dbStatus.loading ? (
+          <div className={`flex-1 flex flex-col justify-center items-center animate-pulse ${isDark ? 'bg-slate-900 text-slate-400' : 'bg-slate-50 text-slate-500'}`}>
+             <div className="w-14 h-14 bg-emerald-500/10 rounded-2xl flex items-center justify-center mb-4">
+               <CategoryIcon name="DollarSign" size={28} className="text-emerald-500" />
+             </div>
+             <p className="text-[10px] font-bold uppercase tracking-widest">Cargando...</p>
+          </div>
+        ) : showAuthGate ? (
+          <div className={`flex-1 flex flex-col justify-between p-6 overflow-y-auto animate-fade-in ${isDark ? 'bg-slate-900 text-white' : 'bg-slate-50 text-slate-800'}`} id="auth-gate-container">
+            <div className="flex-1 flex flex-col justify-center max-w-sm mx-auto w-full space-y-6 py-4">
+              <div className="text-center space-y-2">
+                <div className="inline-flex p-3.5 bg-emerald-600 text-white rounded-[22px] shadow-md shadow-emerald-600/15 animate-pulse">
+                  <CategoryIcon name="DollarSign" size={24} />
+                </div>
+                <h2 className="text-xl font-black tracking-tight mt-2">MiBolsillo Cloud</h2>
+                <p className="text-xs text-slate-400 font-bold leading-relaxed max-w-[280px] mx-auto">
+                  {isRegisterMode 
+                    ? 'Regístrate para guardar y sincronizar tu bolsillo personal con la nube de forma segura.' 
+                    : 'Inicia sesión con tu correo para acceder de forma segura a tus finanzas.'}
+                </p>
+              </div>
+
+              <form onSubmit={isRegisterMode ? handleSignUp : handleSignIn} className="space-y-3.5">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block px-1">Correo Electrónico</label>
+                  <div className="relative">
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">
+                      <CategoryIcon name="User" size={14} />
+                    </span>
+                    <input
+                      type="email"
+                      required
+                      value={authEmail}
+                      onChange={(e) => setAuthEmail(e.target.value)}
+                      placeholder="ejemplo@correo.com"
+                      className={`w-full pl-10 pr-4 py-2.5 text-xs rounded-xl font-bold border outline-none transition-all ${
+                        isDark 
+                          ? 'bg-slate-950 border-slate-850 text-white focus:border-emerald-500' 
+                          : 'bg-white border-slate-200 text-slate-800 focus:border-emerald-500 shadow-xs'
+                      }`}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block px-1">Contraseña</label>
+                  <div className="relative">
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">
+                      <CategoryIcon name="Lock" size={14} />
+                    </span>
+                    <input
+                      type={showPassword ? "text" : "password"}
+                      required
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                      placeholder="••••••••"
+                      minLength={6}
+                      className={`w-full pl-10 pr-10 py-2.5 text-xs rounded-xl font-bold border outline-none transition-all ${
+                        isDark 
+                          ? 'bg-slate-950 border-slate-850 text-white focus:border-emerald-500' 
+                          : 'bg-white border-slate-200 text-slate-800 focus:border-emerald-500 shadow-xs'
+                      }`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className={`absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-lg transition-colors ${
+                        isDark ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800' : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
+                      }`}
+                      title={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                    >
+                      <CategoryIcon name={showPassword ? "EyeOff" : "Eye"} size={14} />
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isAuthLoading}
+                  className="w-full py-3 mt-2 bg-emerald-600 hover:bg-emerald-550 text-white font-black text-xs rounded-xl transition-all flex items-center justify-center gap-2 shadow-md shadow-emerald-600/15 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50"
+                >
+                  {isAuthLoading ? (
+                    <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <CategoryIcon name={isRegisterMode ? "UserPlus" : "LogIn"} size={14} />
+                      {isRegisterMode ? 'Crear Cuenta' : 'Iniciar Sesión'}
+                    </>
+                  )}
+                </button>
+              </form>
+
+              <div className="text-center space-y-3">
+                <button
+                  type="button"
+                  onClick={() => setIsRegisterMode(!isRegisterMode)}
+                  className="text-[11px] font-bold text-emerald-500 hover:underline bg-transparent border-none cursor-pointer"
+                >
+                  {isRegisterMode ? '¿Ya tienes cuenta? Inicia Sesión' : '¿No tienes cuenta? Regístrate gratis'}
+                </button>
+
+                <div className="relative flex py-1 items-center">
+                  <div className="flex-grow border-t border-slate-700/30"></div>
+                  <span className="flex-shrink mx-4 text-[9px] text-slate-400 font-extrabold uppercase tracking-widest">o</span>
+                  <div className="flex-grow border-t border-slate-700/30"></div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleContinueAsGuest}
+                  className={`w-full py-2.5 text-xs font-bold rounded-xl transition-all border ${
+                    isDark 
+                      ? 'bg-slate-950 border-slate-850 hover:bg-slate-850 text-slate-300' 
+                      : 'bg-white border-slate-200 hover:bg-slate-100 text-slate-600 shadow-xs'
+                  }`}
+                >
+                  Continuar como Invitado (Modo Offline)
+                </button>
+              </div>
             </div>
-            <div>
-              <h1 className={`text-sm font-black leading-none ${isDark ? 'text-white' : 'text-slate-900'}`}>MiBolsillo</h1>
-              <span className="text-[10px] text-emerald-500 font-extrabold uppercase tracking-wider">
-                {dbStatus.connected && dbStatus.tablesExist ? 'Nube Supabase' : 'Conectando Nube...'}
-              </span>
+
+            {/* Pie del Auth Gate con estado de Supabase */}
+            <div className="text-center text-[10px] text-slate-400 font-bold border-t border-slate-800/40 pt-4 flex items-center justify-center gap-1.5 font-sans">
+              <span className={`w-1.5 h-1.5 rounded-full ${dbStatus.connected ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+              {dbStatus.connected ? 'Servidor de base de datos conectado' : 'Modo local sin servidor'}
             </div>
           </div>
+        ) : (
+          <>
+            {/* Cabecera de la Aplicación */}
+            <header className={`px-6 pt-[calc(1rem+env(safe-area-inset-top,0px))] sm:pt-4 pb-4 flex justify-between items-center border-b shrink-0 transition-colors duration-300 ${isDark ? 'bg-slate-900 border-slate-800/80' : 'bg-slate-50 border-slate-100/60'}`} id="app-header">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-emerald-600 text-white rounded-2xl shadow-sm">
+                  <CategoryIcon name="DollarSign" size={16} />
+                </div>
+                <div>
+                  <h1 className={`text-sm font-black leading-none ${isDark ? 'text-white' : 'text-slate-900'}`}>MiBolsillo</h1>
+                  <span className="text-[10px] text-emerald-500 font-extrabold uppercase tracking-wider">
+                    {dbStatus.connected && dbStatus.tablesExist ? 'Nube Supabase' : 'Conectando Nube...'}
+                  </span>
+                </div>
+              </div>
 
-          <div className="flex items-center gap-2">
-            {/* Supabase status indicator */}
-            <button
-              onClick={() => setShowDbModal(true)}
-              className={`flex items-center gap-1.5 text-[10px] py-1 px-2.5 rounded-full font-bold border transition-all hover:scale-105 active:scale-95 ${
-                dbStatus.loading
-                  ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 border-slate-200 dark:border-slate-700'
-                  : dbStatus.connected && dbStatus.tablesExist
-                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900/50'
-                  : dbStatus.connected
-                  ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-900/50'
-                  : 'bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 border-rose-200 dark:border-rose-900/50'
-              }`}
-              id="supabase-status-badge"
-              title="Configuración de base de datos Supabase"
-            >
-              <div className={`w-1.5 h-1.5 rounded-full ${
-                dbStatus.loading
-                  ? 'bg-slate-400 animate-pulse'
-                  : dbStatus.connected && dbStatus.tablesExist
-                  ? 'bg-emerald-500 animate-pulse'
-                  : dbStatus.connected
-                  ? 'bg-amber-500 animate-pulse'
-                  : 'bg-rose-500'
-              }`} />
-              <span>Supabase</span>
-            </button>
+              <div className="flex items-center gap-2">
+                {/* Botón de Cuenta */}
+                <button
+                  onClick={() => {
+                    if (sessionUser) {
+                      setShowProfileModal(true);
+                    } else {
+                      setShowAuthGate(true);
+                    }
+                  }}
+                  className={`flex items-center gap-1.5 text-[10px] py-1 px-3 rounded-full font-black border transition-all hover:scale-105 active:scale-95 ${
+                    sessionUser
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/20'
+                      : isDark 
+                      ? 'bg-slate-850 border-slate-750 text-slate-200 hover:text-white hover:bg-slate-750' 
+                      : 'bg-slate-100 border-slate-200 text-slate-700 hover:bg-slate-200'
+                  }`}
+                  id="profile-select-badge"
+                  title={sessionUser ? `Sesión activa: ${sessionUser.email}` : 'Iniciar Sesión / Registrarse'}
+                >
+                  <CategoryIcon name="User" size={11} className={sessionUser ? "text-emerald-500" : "text-amber-500"} />
+                  <span className="max-w-[90px] truncate">
+                    {sessionUser ? sessionUser.email.split('@')[0] : 'Iniciar Sesión'}
+                  </span>
+                </button>
 
-            {expenses.length > 0 && (
-              <span className={`text-[10px] py-1 px-2 rounded-full font-bold border transition-colors ${
-                isDark 
-                  ? 'bg-emerald-950/40 text-emerald-400 border-emerald-900/40' 
-                  : 'bg-emerald-50 text-emerald-700 border-emerald-100'
-              }`}>
-                {expenses.length} T.
-              </span>
-            )}
-          </div>
-        </header>
+                {/* Supabase status indicator */}
+                <button
+                  onClick={() => setShowDbModal(true)}
+                  className={`flex items-center gap-1.5 text-[10px] py-1 px-2.5 rounded-full font-bold border transition-all hover:scale-105 active:scale-95 ${
+                    dbStatus.loading
+                      ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 border-slate-200 dark:border-slate-700'
+                      : dbStatus.connected && dbStatus.tablesExist
+                      ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900/50'
+                      : dbStatus.connected
+                      ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-900/50'
+                      : 'bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 border-rose-200 dark:border-rose-900/50'
+                  }`}
+                  id="supabase-status-badge"
+                  title="Configuración de base de datos Supabase"
+                >
+                  <div className={`w-1.5 h-1.5 rounded-full ${
+                    dbStatus.loading
+                      ? 'bg-slate-400 animate-pulse'
+                      : dbStatus.connected && dbStatus.tablesExist
+                      ? 'bg-emerald-500 animate-pulse'
+                      : dbStatus.connected
+                      ? 'bg-amber-500 animate-pulse'
+                      : 'bg-rose-500'
+                  }`} />
+                  <span>Supabase</span>
+                </button>
+
+                {expenses.length > 0 && (
+                  <span className={`text-[10px] py-1 px-2 rounded-full font-bold border transition-colors ${
+                    isDark 
+                      ? 'bg-emerald-950/40 text-emerald-400 border-emerald-900/40' 
+                      : 'bg-emerald-50 text-emerald-700 border-emerald-100'
+                  }`}>
+                    {expenses.length} T.
+                  </span>
+                )}
+              </div>
+            </header>
 
         {/* Cuerpo Principal Scrollable */}
         <main className="flex-1 overflow-y-auto px-5 py-4 pb-[calc(5.5rem+env(safe-area-inset-bottom,0px))] sm:pb-24 space-y-4" id="app-body-content">
@@ -602,6 +929,180 @@ export default function App() {
           </div>
         )}
 
+        {/* Modal de Gestión de Perfil */}
+        {showProfileModal && sessionUser && (
+          <div className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm z-45 flex flex-col justify-end animate-fade-in" id="profile-management-modal">
+            <div className={`w-full max-h-[90%] rounded-t-[32px] p-6 overflow-y-auto flex flex-col space-y-5 border-t transition-colors duration-300 shadow-2xl ${
+              isDark ? 'bg-slate-900 border-slate-800 text-white shadow-black/80' : 'bg-white border-slate-100 text-slate-800 shadow-slate-200/50'
+            }`}>
+              <div className="flex justify-between items-start">
+                <div>
+                  <h3 className="text-base font-black flex items-center gap-2">
+                    <CategoryIcon name="User" className="text-emerald-500" size={18} />
+                    Gestión de Perfil
+                  </h3>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Configuración de tu Cuenta</p>
+                </div>
+                <button 
+                  onClick={() => setShowProfileModal(false)} 
+                  className={`p-1.5 rounded-full transition-colors ${isDark ? 'bg-slate-800 hover:bg-slate-750 text-slate-400' : 'bg-slate-100 hover:bg-slate-200 text-slate-500'}`}
+                >
+                  <CategoryIcon name="X" size={16} />
+                </button>
+              </div>
+
+              {/* Información Actual */}
+              <div className={`p-4 rounded-2xl border ${isDark ? 'bg-slate-950/40 border-slate-800' : 'bg-slate-50 border-slate-200'}`}>
+                <span className="text-[9px] font-extrabold uppercase tracking-wider text-slate-400 block mb-1">Correo Electrónico Actual</span>
+                <div className="flex items-center gap-2">
+                  <div className="p-2 bg-emerald-500/10 rounded-lg text-emerald-500">
+                    <CategoryIcon name="Mail" size={14} />
+                  </div>
+                  <span className="text-xs font-black truncate">{sessionUser.email}</span>
+                </div>
+              </div>
+
+              {/* Actualizar Correo */}
+              <form onSubmit={handleUpdateEmail} className="flex flex-col gap-2">
+                <label className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block px-0.5">Cambiar Correo Electrónico</label>
+                <div className="flex gap-2">
+                  <input
+                    type="email"
+                    required
+                    value={newEmailInput}
+                    onChange={(e) => setNewEmailInput(e.target.value)}
+                    placeholder="Nuevo correo"
+                    className={`flex-1 px-3 py-2 text-xs rounded-xl font-bold border outline-none transition-all ${
+                      isDark 
+                        ? 'bg-slate-950 border-slate-850 text-white focus:border-emerald-500' 
+                        : 'bg-white border-slate-200 text-slate-800 focus:border-emerald-500 shadow-xs'
+                    }`}
+                  />
+                  <button
+                    type="submit"
+                    disabled={isUpdatingEmail}
+                    className="px-4 bg-emerald-600 hover:bg-emerald-550 disabled:opacity-50 text-white font-black text-xs rounded-xl transition-all shadow-sm flex items-center gap-1.5"
+                  >
+                    {isUpdatingEmail ? '...' : 'Actualizar'}
+                  </button>
+                </div>
+              </form>
+
+              {/* Actualizar Contraseña */}
+              <div className="flex flex-col gap-2">
+                <button 
+                  type="button"
+                  onClick={() => setShowUpdatePassword(!showUpdatePassword)}
+                  className={`text-[10px] font-extrabold uppercase tracking-wider text-left px-0.5 flex items-center justify-between group ${
+                    showUpdatePassword ? 'text-emerald-500' : 'text-slate-400'
+                  }`}
+                >
+                  Cambiar Contraseña
+                  <CategoryIcon name={showUpdatePassword ? "ChevronUp" : "ChevronDown"} size={14} className="transition-transform" />
+                </button>
+                
+                {showUpdatePassword && (
+                  <form onSubmit={handleUpdatePassword} className="flex flex-col gap-2 animate-in fade-in slide-in-from-top-2 duration-200">
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        required
+                        minLength={6}
+                        value={newPasswordUpdateInput}
+                        onChange={(e) => setNewPasswordUpdateInput(e.target.value)}
+                        placeholder="Nueva contraseña (min. 6)"
+                        className={`flex-1 px-3 py-2 text-xs rounded-xl font-bold border outline-none transition-all ${
+                          isDark 
+                            ? 'bg-slate-950 border-slate-850 text-white focus:border-emerald-500' 
+                            : 'bg-white border-slate-200 text-slate-800 focus:border-emerald-500 shadow-xs'
+                        }`}
+                      />
+                      <button
+                        type="submit"
+                        disabled={isUpdatingPassword}
+                        className="px-4 bg-emerald-600 hover:bg-emerald-550 disabled:opacity-50 text-white font-black text-xs rounded-xl transition-all shadow-sm flex items-center gap-1.5"
+                      >
+                        {isUpdatingPassword ? '...' : 'Guardar'}
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+
+              <div className="border-t border-slate-750/20 my-1"></div>
+
+              {/* Acciones de Peligro */}
+              <div className="flex flex-col gap-3">
+                <button
+                  onClick={handleSignOut}
+                  className="w-full py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 font-bold text-xs rounded-xl transition-all border border-slate-200 dark:border-slate-700 flex items-center justify-center gap-2"
+                >
+                  <CategoryIcon name="LogOut" size={14} />
+                  Cerrar Sesión
+                </button>
+
+                <button
+                  onClick={handleDeleteAccount}
+                  className="w-full py-2.5 bg-rose-600/5 hover:bg-rose-600/10 text-rose-500 font-bold text-xs rounded-xl transition-all border border-rose-500/20 flex items-center justify-center gap-2"
+                >
+                  <CategoryIcon name="Trash2" size={14} />
+                  Eliminar mi Cuenta para Siempre
+                </button>
+              </div>
+
+              <div className={`p-3 rounded-xl border text-[9px] leading-normal flex gap-2 ${
+                isDark ? 'bg-slate-950/30 border-slate-800/80 text-slate-400' : 'bg-slate-50 border-slate-150 text-slate-500'
+              }`}>
+                <CategoryIcon name="Info" size={12} className="text-slate-400 shrink-0 mt-0.5" />
+                <p>
+                  Al actualizar tu correo, tus registros de gastos e ingresos se transferirán automáticamente a tu nueva identidad.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Botón de Cerrar Sesión si está logueado - ELIMINADO en favor del modal de perfil */}
+
+        {/* Custom Confirmation Modal para Perfiles */}
+        {confirmModal && confirmModal.isOpen && (
+          <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-fade-in" id="custom-confirm-modal-profiles">
+            <div 
+              className={`w-full max-w-xs rounded-3xl p-5 border shadow-2xl transition-all scale-in ${
+                isDark ? 'bg-slate-900 border-slate-800 text-white shadow-black/80' : 'bg-white border-slate-100 text-slate-900 shadow-slate-200/50'
+              }`}
+            >
+              <h3 className="text-xs font-black tracking-tight mb-2 uppercase text-rose-500">
+                {confirmModal.title}
+              </h3>
+              <p className={`text-[11px] mb-5 leading-normal font-medium whitespace-pre-line ${isDark ? 'text-slate-300' : 'text-slate-655'}`}>
+                {confirmModal.message}
+              </p>
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setConfirmModal(null)}
+                  className={`px-3 py-1.5 text-[10px] font-bold rounded-lg border transition-colors ${
+                    isDark 
+                      ? 'bg-slate-800 border-slate-750 text-slate-300 hover:bg-slate-700 hover:text-white' 
+                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={() => {
+                    confirmModal.onConfirm();
+                    setConfirmModal(null);
+                  }}
+                  className="px-3 py-1.5 text-[10px] font-black rounded-lg bg-rose-600 text-white hover:bg-rose-550 transition-colors shadow-sm shadow-rose-600/15"
+                >
+                  Confirmar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Barra de Navegación Inferior */}
         <nav 
           className={`absolute bottom-0 left-0 right-0 border-t px-6 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] sm:pb-3 flex justify-around items-center z-20 shrink-0 transition-colors duration-300 ${
@@ -692,7 +1193,9 @@ export default function App() {
             </span>
           </button>
         </nav>
-      </div>
+      </>
+    )}
+  </div>
 
       {/* Panel Técnico en la vista de escritorio */}
       <div className={`hidden lg:flex flex-col max-w-[420px] border rounded-[30px] p-6 shadow-xl mt-6 space-y-4 self-center ml-8 text-xs leading-relaxed absolute left-[calc(50%+230px)] top-1/2 -translate-y-1/2 transition-colors duration-300 ${

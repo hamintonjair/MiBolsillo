@@ -23,6 +23,7 @@ import {
   Wifi,
   ChevronRight,
   ChevronDown,
+  ChevronUp,
   Sun,
   Moon,
   Info,
@@ -38,7 +39,9 @@ import {
   Copy,
   RefreshCw,
   AlertTriangle,
-  CloudLightning
+  CloudLightning,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 interface CategoryIconProps {
@@ -85,6 +88,8 @@ export const CategoryIcon: React.FC<CategoryIconProps> = ({ name, className = ''
       return <ChevronRight className={className} size={size} />;
     case 'ChevronDown':
       return <ChevronDown className={className} size={size} />;
+    case 'ChevronUp':
+      return <ChevronUp className={className} size={size} />;
     case 'Sun':
       return <Sun className={className} size={size} />;
     case 'Moon':
@@ -117,6 +122,10 @@ export const CategoryIcon: React.FC<CategoryIconProps> = ({ name, className = ''
       return <AlertTriangle className={className} size={size} />;
     case 'CloudLightning':
       return <CloudLightning className={className} size={size} />;
+    case 'Eye':
+      return <Eye className={className} size={size} />;
+    case 'EyeOff':
+      return <EyeOff className={className} size={size} />;
     default:
       return <HelpCircle className={className} size={size} />;
   }

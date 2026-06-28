@@ -40,27 +40,39 @@ export const supabase = createClient(
 export const SQL_CREATION_SCRIPT = `
 -- Copia y pega este script en el editor SQL de Supabase (SQL Editor -> New Query)
 
--- 1. Crear tabla de Gastos (expenses)
+-- 1. Crear tabla de Gastos (expenses) con columna profile_id para independizar perfiles
 CREATE TABLE IF NOT EXISTS public.expenses (
     id TEXT PRIMARY KEY,
     amount NUMERIC NOT NULL,
     category TEXT NOT NULL,
     date TEXT NOT NULL,
     description TEXT,
+    profile_id TEXT DEFAULT 'Principal', -- Identificador del perfil/usuario o email
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- Asegurar que la columna profile_id exista si la tabla ya había sido creada anteriormente
+ALTER TABLE public.expenses ADD COLUMN IF NOT EXISTS profile_id TEXT DEFAULT 'Principal';
+
 -- 2. Crear tabla de Ingresos Mensuales (monthly_income)
+-- El campo month almacenará la combinación 'profile_id:month' para asegurar perfiles independientes
 CREATE TABLE IF NOT EXISTS public.monthly_income (
-    month TEXT PRIMARY KEY, -- Formato 'YYYY-MM'
+    month TEXT PRIMARY KEY, -- Formato 'profile_id:month' o 'YYYY-MM' (retrocompatible)
     income NUMERIC NOT NULL,
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- 3. Habilitar el acceso público (o políticas RLS si lo prefieres)
--- Para facilitar las pruebas iniciales, habilitamos acceso público libre:
+-- 3. Crear tabla de Usuarios (custom_users) para evitar problemas de confirmación de email con Supabase Auth
+CREATE TABLE IF NOT EXISTS public.custom_users (
+    email TEXT PRIMARY KEY,
+    password TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 4. Habilitar el acceso público (o políticas RLS si lo prefieres)
 ALTER TABLE public.expenses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.monthly_income ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.custom_users ENABLE ROW LEVEL SECURITY;
 
 -- Limpiar políticas anteriores si ya existían para evitar errores de duplicación
 DROP POLICY IF EXISTS "Permitir todo a usuarios anonimos en expenses" ON public.expenses;
@@ -72,6 +84,12 @@ WITH CHECK (true);
 DROP POLICY IF EXISTS "Permitir todo a usuarios anonimos en monthly_income" ON public.monthly_income;
 CREATE POLICY "Permitir todo a usuarios anonimos en monthly_income" 
 ON public.monthly_income FOR ALL 
+USING (true) 
+WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Permitir todo a usuarios anonimos en custom_users" ON public.custom_users;
+CREATE POLICY "Permitir todo a usuarios anonimos en custom_users" 
+ON public.custom_users FOR ALL 
 USING (true) 
 WITH CHECK (true);
 `;
@@ -127,11 +145,29 @@ export async function testSupabaseConnection(): Promise<{ success: boolean; tabl
       }
     }
 
+    // Probar a consultar custom_users
+    const { error: errorUsers } = await supabase.from('custom_users').select('email').limit(1);
+    let usersExist = true;
+
+    if (errorUsers) {
+      if (errorUsers.code === '42P01') {
+        usersExist = false;
+      } else if (errorUsers.code === 'PGRST301' || errorUsers.message?.includes('JWT') || errorUsers.message?.includes('API key')) {
+        isConnected = false;
+        errorMsg = 'API Key o URL de Supabase inválida: ' + errorUsers.message;
+      } else if (errorUsers.code === '42501') {
+        usersExist = true;
+        if (!errorMsg) errorMsg = 'Error de políticas RLS en custom_users: ' + errorUsers.message;
+      } else {
+        if (!errorMsg) errorMsg = errorUsers.message;
+      }
+    }
+
     if (!isConnected) {
       return { success: false, tablesExist: false, error: errorMsg };
     }
 
-    const tablesExist = expensesExist && incomeExist;
+    const tablesExist = expensesExist && incomeExist && usersExist;
     return {
       success: true,
       tablesExist,
@@ -144,17 +180,25 @@ export async function testSupabaseConnection(): Promise<{ success: boolean; tabl
 }
 
 /**
- * Obtiene todos los gastos desde Supabase, ordenados por fecha desc
+ * Obtiene todos los gastos desde Supabase para un perfil específico, ordenados por fecha desc
  */
-export async function fetchExpensesFromSupabase(): Promise<{ data: Expense[] | null; error: string | null }> {
+export async function fetchExpensesFromSupabase(profileId: string): Promise<{ data: Expense[] | null; error: string | null }> {
   if (!hasValidCredentials()) {
     return { data: [], error: 'Supabase no configurado' };
   }
   try {
-    const { data, error } = await supabase
+    const query = supabase
       .from('expenses')
-      .select('id, amount, category, date, description')
-      .order('date', { ascending: false });
+      .select('id, amount, category, date, description, profile_id');
+
+    // Si es el perfil por defecto "Principal", traemos también registros anteriores que tengan profile_id nulo o 'default'
+    if (profileId === 'Principal' || profileId === 'default') {
+      query.or(`profile_id.eq.${profileId},profile_id.is.null,profile_id.eq.default`);
+    } else {
+      query.eq('profile_id', profileId);
+    }
+
+    const { data, error } = await query.order('date', { ascending: false });
 
     if (error) {
       return { data: null, error: error.message };
@@ -166,9 +210,9 @@ export async function fetchExpensesFromSupabase(): Promise<{ data: Expense[] | n
 }
 
 /**
- * Sincroniza un gasto individual en Supabase (inserta o actualiza)
+ * Sincroniza un gasto individual en Supabase para un perfil específico (inserta o actualiza)
  */
-export async function saveExpenseToSupabase(expense: Expense): Promise<{ success: boolean; error: string | null }> {
+export async function saveExpenseToSupabase(expense: Expense, profileId: string): Promise<{ success: boolean; error: string | null }> {
   if (!hasValidCredentials()) {
     return { success: false, error: 'Supabase no configurado' };
   }
@@ -180,7 +224,8 @@ export async function saveExpenseToSupabase(expense: Expense): Promise<{ success
         amount: expense.amount,
         category: expense.category,
         date: expense.date,
-        description: expense.description
+        description: expense.description,
+        profile_id: profileId
       });
 
     if (error) {
@@ -193,9 +238,9 @@ export async function saveExpenseToSupabase(expense: Expense): Promise<{ success
 }
 
 /**
- * Sincroniza múltiples gastos de forma masiva (útil para la carga inicial/migración offline)
+ * Sincroniza múltiples gastos de forma masiva para un perfil específico (útil para la carga inicial/migración offline)
  */
-export async function syncMultipleExpensesToSupabase(expenses: Expense[]): Promise<{ success: boolean; error: string | null }> {
+export async function syncMultipleExpensesToSupabase(expenses: Expense[], profileId: string): Promise<{ success: boolean; error: string | null }> {
   if (expenses.length === 0) return { success: true, error: null };
   if (!hasValidCredentials()) {
     return { success: false, error: 'Supabase no configurado' };
@@ -206,7 +251,8 @@ export async function syncMultipleExpensesToSupabase(expenses: Expense[]): Promi
       amount: e.amount,
       category: e.category,
       date: e.date,
-      description: e.description
+      description: e.description,
+      profile_id: profileId
     }));
 
     const { error } = await supabase
@@ -245,40 +291,61 @@ export async function deleteExpenseFromSupabase(id: string): Promise<{ success: 
 }
 
 /**
- * Obtiene el ingreso mensual para un mes específico
+ * Obtiene el ingreso mensual para un mes y perfil específico
  */
-export async function fetchIncomeFromSupabase(month: string): Promise<{ income: number | null; error: string | null }> {
+export async function fetchIncomeFromSupabase(month: string, profileId: string): Promise<{ income: number | null; error: string | null }> {
   if (!hasValidCredentials()) {
     return { income: null, error: 'Supabase no configurado' };
   }
   try {
+    const key = `${profileId}:${month}`;
+    // Intentar buscar con el formato 'perfil:mes'
     const { data, error } = await supabase
       .from('monthly_income')
       .select('income')
-      .eq('month', month)
+      .eq('month', key)
       .maybeSingle();
 
     if (error) {
       return { income: null, error: error.message };
     }
-    return { income: data ? Number(data.income) : null, error: null };
+    
+    if (data) {
+      return { income: Number(data.income), error: null };
+    }
+    
+    // Si no se encuentra y el perfil es 'Principal', intentar buscar con el formato antiguo de solo 'mes' para retrocompatibilidad
+    if (profileId === 'Principal') {
+      const { data: oldData, error: oldError } = await supabase
+        .from('monthly_income')
+        .select('income')
+        .eq('month', month)
+        .maybeSingle();
+        
+      if (!oldError && oldData) {
+        return { income: Number(oldData.income), error: null };
+      }
+    }
+    
+    return { income: null, error: null };
   } catch (err: any) {
     return { income: null, error: err.message || 'Error al obtener ingresos' };
   }
 }
 
 /**
- * Guarda o actualiza el ingreso mensual de un mes específico
+ * Guarda o actualiza el ingreso mensual de un mes y perfil específico
  */
-export async function saveIncomeToSupabase(month: string, income: number): Promise<{ success: boolean; error: string | null }> {
+export async function saveIncomeToSupabase(month: string, income: number, profileId: string): Promise<{ success: boolean; error: string | null }> {
   if (!hasValidCredentials()) {
     return { success: false, error: 'Supabase no configurado' };
   }
   try {
+    const key = `${profileId}:${month}`;
     const { error } = await supabase
       .from('monthly_income')
       .upsert({
-        month,
+        month: key,
         income
       });
 
@@ -290,3 +357,214 @@ export async function saveIncomeToSupabase(month: string, income: number): Promi
     return { success: false, error: err.message || 'Error al guardar ingresos' };
   }
 }
+
+/**
+ * Registra un nuevo usuario con Correo y Contraseña
+ */
+export async function signUpUser(email: string, password: string): Promise<{ success: boolean; user: any; error: string | null }> {
+  if (!hasValidCredentials()) {
+    return { success: false, user: null, error: 'Supabase no configurado' };
+  }
+  try {
+    const cleanEmail = email.toLowerCase().trim();
+    // 1. Verificar si ya existe en la tabla custom_users
+    const { data: existingUser, error: checkError } = await supabase
+      .from('custom_users')
+      .select('email')
+      .eq('email', cleanEmail)
+      .maybeSingle();
+
+    if (checkError) {
+      return { success: false, user: null, error: 'Error al verificar disponibilidad del correo: ' + checkError.message };
+    }
+
+    if (existingUser) {
+      return { success: false, user: null, error: 'El correo electrónico ya está registrado.' };
+    }
+
+    // 2. Insertar nuevo usuario
+    const { error: insertError } = await supabase
+      .from('custom_users')
+      .insert({
+        email: cleanEmail,
+        password: password
+      });
+
+    if (insertError) {
+      return { success: false, user: null, error: 'Error al crear la cuenta: ' + insertError.message };
+    }
+
+    const user = { email: cleanEmail };
+    try {
+      localStorage.setItem('custom_session_user', JSON.stringify(user));
+    } catch (e) {}
+
+    return { success: true, user, error: null };
+  } catch (err: any) {
+    return { success: false, user: null, error: err.message || 'Error al registrar usuario' };
+  }
+}
+
+/**
+ * Inicia sesión con Correo y Contraseña
+ */
+export async function signInUser(email: string, password: string): Promise<{ success: boolean; user: any; error: string | null }> {
+  if (!hasValidCredentials()) {
+    return { success: false, user: null, error: 'Supabase no configurado' };
+  }
+  try {
+    const cleanEmail = email.toLowerCase().trim();
+    const { data: userRecord, error } = await supabase
+      .from('custom_users')
+      .select('email, password')
+      .eq('email', cleanEmail)
+      .maybeSingle();
+
+    if (error) {
+      return { success: false, user: null, error: 'Error al buscar el usuario: ' + error.message };
+    }
+
+    if (!userRecord || userRecord.password !== password) {
+      return { success: false, user: null, error: 'Correo o contraseña incorrectos.' };
+    }
+
+    const user = { email: cleanEmail };
+    try {
+      localStorage.setItem('custom_session_user', JSON.stringify(user));
+    } catch (e) {}
+
+    return { success: true, user, error: null };
+  } catch (err: any) {
+    return { success: false, user: null, error: err.message || 'Error al iniciar sesión' };
+  }
+}
+
+/**
+ * Actualiza el correo electrónico del usuario y sincroniza sus datos
+ */
+export async function updateUserEmail(oldEmail: string, newEmail: string): Promise<{ success: boolean; error: string | null }> {
+  if (!supabase) return { success: false, error: 'Supabase no configurado' };
+  
+  const cleanOld = oldEmail.toLowerCase().trim();
+  const cleanNew = newEmail.toLowerCase().trim();
+
+  try {
+    // 1. Verificar si el nuevo email ya existe
+    const { data: existing } = await supabase
+      .from('custom_users')
+      .select('email')
+      .eq('email', cleanNew)
+      .maybeSingle();
+    
+    if (existing) {
+      return { success: false, error: 'El nuevo correo ya está registrado por otro usuario.' };
+    }
+
+    // 2. Obtener la contraseña actual (para re-insertar o actualizar)
+    const { data: userRecord } = await supabase
+      .from('custom_users')
+      .select('password')
+      .eq('email', cleanOld)
+      .single();
+
+    if (!userRecord) return { success: false, error: 'Usuario no encontrado.' };
+
+    // 3. Crear el nuevo registro de usuario
+    const { error: insertError } = await supabase
+      .from('custom_users')
+      .insert({ email: cleanNew, password: userRecord.password });
+
+    if (insertError) return { success: false, error: 'Error al crear nuevo perfil: ' + insertError.message };
+
+    // 4. Actualizar referencias en gastos e ingresos
+    await supabase.from('expenses').update({ profile_id: cleanNew }).eq('profile_id', cleanOld);
+    await supabase.from('monthly_income').update({ profile_id: cleanNew }).eq('profile_id', cleanOld);
+
+    // 5. Eliminar el registro antiguo
+    await supabase.from('custom_users').delete().eq('email', cleanOld);
+
+    // 6. Actualizar sesión local
+    localStorage.setItem('custom_session_user', JSON.stringify({ email: cleanNew }));
+
+    return { success: true, error: null };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Elimina la cuenta y todos sus datos asociados
+ */
+export async function deleteUserAccount(email: string): Promise<{ success: boolean; error: string | null }> {
+  if (!supabase) return { success: false, error: 'Supabase no configurado' };
+  
+  const cleanEmail = email.toLowerCase().trim();
+
+  try {
+    // 1. Eliminar datos asociados
+    await supabase.from('expenses').delete().eq('profile_id', cleanEmail);
+    await supabase.from('monthly_income').delete().eq('profile_id', cleanEmail);
+
+    // 2. Eliminar usuario
+    const { error } = await supabase.from('custom_users').delete().eq('email', cleanEmail);
+    
+    if (error) return { success: false, error: error.message };
+
+    // 3. Limpiar sesión
+    localStorage.removeItem('custom_session_user');
+
+    return { success: true, error: null };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Actualiza la contraseña del usuario
+ */
+export async function updateUserPassword(email: string, newPassword: string): Promise<{ success: boolean; error: string | null }> {
+  if (!supabase) return { success: false, error: 'Supabase no configurado' };
+  
+  const cleanEmail = email.toLowerCase().trim();
+
+  try {
+    const { error } = await supabase
+      .from('custom_users')
+      .update({ password: newPassword })
+      .eq('email', cleanEmail);
+
+    if (error) return { success: false, error: error.message };
+    return { success: true, error: null };
+  } catch (err: any) {
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Cierra la sesión activa
+ */
+export async function signOutUser(): Promise<{ success: boolean; error: string | null }> {
+  try {
+    try {
+      localStorage.removeItem('custom_session_user');
+    } catch (e) {}
+    return { success: true, error: null };
+  } catch (err: any) {
+    return { success: true, error: null };
+  }
+}
+
+/**
+ * Obtiene el usuario actual si hay una sesión activa
+ */
+export async function getCurrentUser(): Promise<{ user: any; error: string | null }> {
+  try {
+    const saved = localStorage.getItem('custom_session_user');
+    if (saved) {
+      const user = JSON.parse(saved);
+      return { user, error: null };
+    }
+  } catch (e) {}
+  return { user: null, error: null };
+}
+
