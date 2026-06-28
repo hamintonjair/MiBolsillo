@@ -30,6 +30,14 @@ export const ExpenseList: React.FC<ExpenseListProps> = ({
   const [customEndDate, setCustomEndDate] = useState('');
   const [activeItem, setActiveItem] = useState<string | null>(null); // To toggle actions drawer on mobile
   
+  // Estado para el modal de confirmación personalizado (reemplaza confirm() nativo por restricciones de iframe/sandbox)
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
+  
   // Generar fecha actual y cálculos de rangos
   const today = new Date();
   const todayStr = today.toISOString().split('T')[0];
@@ -403,9 +411,12 @@ export const ExpenseList: React.FC<ExpenseListProps> = ({
               <button
                 onClick={() => {
                   if (olderWeeksCount === 0) return;
-                  if (confirm('¿Estás seguro de que deseas eliminar permanentemente todos los gastos registrados de semanas anteriores (más de 7 días atrás)?')) {
-                    onDeleteExpensesBulk('weeks');
-                  }
+                  setConfirmModal({
+                    isOpen: true,
+                    title: 'Eliminar registros antiguos',
+                    message: '¿Estás seguro de que deseas eliminar permanentemente todos los gastos registrados de semanas anteriores (más de 7 días atrás)? Esta acción no se puede deshacer.',
+                    onConfirm: () => onDeleteExpensesBulk('weeks')
+                  });
                 }}
                 disabled={olderWeeksCount === 0}
                 className={`py-2 px-3 border rounded-xl text-[10px] font-black transition-all text-center flex flex-col items-center justify-center gap-1 ${
@@ -421,9 +432,12 @@ export const ExpenseList: React.FC<ExpenseListProps> = ({
               <button
                 onClick={() => {
                   if (olderMonthsCount === 0) return;
-                  if (confirm('¿Estás seguro de que deseas eliminar permanentemente todos los gastos de meses anteriores (anteriores al 1 de este mes)?')) {
-                    onDeleteExpensesBulk('months');
-                  }
+                  setConfirmModal({
+                    isOpen: true,
+                    title: 'Eliminar registros antiguos',
+                    message: '¿Estás seguro de que deseas eliminar permanentemente todos los gastos de meses anteriores (anteriores al 1 de este mes)? Esta acción no se puede deshacer.',
+                    onConfirm: () => onDeleteExpensesBulk('months')
+                  });
                 }}
                 disabled={olderMonthsCount === 0}
                 className={`py-2 px-3 border rounded-xl text-[10px] font-black transition-all text-center flex flex-col items-center justify-center gap-1 ${
@@ -561,10 +575,15 @@ export const ExpenseList: React.FC<ExpenseListProps> = ({
                               </button>
                               <button
                                 onClick={() => {
-                                  if (confirm('¿Estás seguro de que deseas eliminar este gasto de forma permanente?')) {
-                                    onDeleteExpense(exp.id);
-                                    setActiveItem(null);
-                                  }
+                                  setConfirmModal({
+                                    isOpen: true,
+                                    title: 'Eliminar gasto',
+                                    message: '¿Estás seguro de que deseas eliminar este gasto de forma permanente? Esta acción no se puede deshacer.',
+                                    onConfirm: () => {
+                                      onDeleteExpense(exp.id);
+                                      setActiveItem(null);
+                                    }
+                                  });
                                 }}
                                 className={`px-3 py-1.5 border text-[11px] font-bold rounded-xl flex items-center gap-1.5 transition-colors shadow-xs ${
                                   isDark 
@@ -627,6 +646,47 @@ export const ExpenseList: React.FC<ExpenseListProps> = ({
           </>
         )}
       </div>
+
+      {/* Custom Confirmation Modal */}
+      {confirmModal && confirmModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in" id="custom-confirm-modal">
+          <div 
+            className={`w-full max-w-sm rounded-3xl p-6 border shadow-2xl transition-all scale-in ${
+              isDark ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-100 text-slate-900'
+            }`}
+          >
+            <h3 className="text-base font-black tracking-tight mb-2">
+              {confirmModal.title}
+            </h3>
+            <p className={`text-xs mb-6 leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+              {confirmModal.message}
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setConfirmModal(null)}
+                className={`px-4 py-2 text-xs font-bold rounded-xl border transition-colors ${
+                  isDark 
+                    ? 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white' 
+                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+                id="confirm-modal-cancel"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => {
+                  confirmModal.onConfirm();
+                  setConfirmModal(null);
+                }}
+                className="px-4 py-2 text-xs font-black rounded-xl bg-rose-600 text-white hover:bg-rose-550 transition-colors shadow-md shadow-rose-600/15"
+                id="confirm-modal-confirm"
+              >
+                Confirmar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

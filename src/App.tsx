@@ -10,19 +10,23 @@ import Dashboard from './components/Dashboard';
 import ExpenseForm from './components/ExpenseForm';
 import ExpenseList from './components/ExpenseList';
 import CategoryIcon from './components/CategoryIcon';
-import { Preferences } from '@capacitor/preferences';
+import { 
+  testSupabaseConnection, 
+  fetchExpensesFromSupabase, 
+  saveExpenseToSupabase, 
+  syncMultipleExpensesToSupabase, 
+  deleteExpenseFromSupabase, 
+  fetchIncomeFromSupabase, 
+  saveIncomeToSupabase,
+  SQL_CREATION_SCRIPT 
+} from './supabase';
 
 export default function App() {
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    const saved = localStorage.getItem('app_theme');
-    return saved === 'light' ? 'light' : 'dark';
-  });
+  const [theme, setTheme] = useState<'light' | 'dark'>('dark');
   const isDark = theme === 'dark';
 
   const toggleTheme = () => {
-    const nextTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(nextTheme);
-    localStorage.setItem('app_theme', nextTheme);
+    setTheme(prev => prev === 'dark' ? 'light' : 'dark');
   };
 
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -38,6 +42,20 @@ export default function App() {
   // Reloj simulador de la barra de estado móvil
   const [time, setTime] = useState<string>('12:00');
 
+  // Estado de la conexión a Supabase
+  const [dbStatus, setDbStatus] = useState<{
+    connected: boolean;
+    tablesExist: boolean;
+    error?: string;
+    loading: boolean;
+  }>({
+    connected: false,
+    tablesExist: false,
+    loading: true
+  });
+
+  const [showDbModal, setShowDbModal] = useState<boolean>(false);
+
   // Trigger custom in-app notification
   const triggerNotification = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
     setNotification({ message, type });
@@ -46,70 +64,99 @@ export default function App() {
     }, 4500);
   };
 
+  // Función para comprobar la conexión a Supabase
+  const checkSupabase = async () => {
+    setDbStatus(prev => ({ ...prev, loading: true }));
+    const result = await testSupabaseConnection();
+    setDbStatus({
+      connected: result.success,
+      tablesExist: result.tablesExist,
+      error: result.error,
+      loading: false
+    });
+    return result;
+  };
+
+  useEffect(() => {
+    checkSupabase();
+  }, []);
+
   // Función para borrar de forma masiva registros antiguos
-  const handleDeleteExpensesBulk = (type: 'weeks' | 'months') => {
+  const handleDeleteExpensesBulk = async (type: 'weeks' | 'months') => {
     const today = new Date();
     let cutoffDateStr = '';
 
     if (type === 'weeks') {
-      // Gastos de semanas anteriores (más antiguos de 7 días atrás)
       const cutoff = new Date();
       cutoff.setDate(cutoff.getDate() - 7);
       cutoffDateStr = cutoff.toISOString().split('T')[0];
     } else if (type === 'months') {
-      // Gastos de meses anteriores (más antiguos que el día 1 del mes actual)
       cutoffDateStr = today.toISOString().slice(0, 7) + '-01';
     }
 
-    const updated = expenses.filter(exp => {
-      // Conservamos los gastos cuya fecha es mayor o igual a la de corte
-      return exp.date >= cutoffDateStr;
-    });
+    const expensesToDelete = expenses.filter(exp => exp.date < cutoffDateStr);
+    const updated = expenses.filter(exp => exp.date >= cutoffDateStr);
 
     const deletedCount = expenses.length - updated.length;
     if (deletedCount > 0) {
-      saveExpensesToStorage(updated);
-      triggerNotification(`Se eliminaron ${deletedCount} registros anteriores con éxito.`, 'success');
+      setExpenses(updated);
+      
+      // Eliminar de Supabase de manera secuencial
+      if (dbStatus.connected && dbStatus.tablesExist) {
+        let errorOccurred = false;
+        for (const exp of expensesToDelete) {
+          const { success } = await deleteExpenseFromSupabase(exp.id);
+          if (!success) errorOccurred = true;
+        }
+        if (errorOccurred) {
+          triggerNotification(`Error al sincronizar con la nube al borrar algunos registros.`, 'error');
+        } else {
+          triggerNotification(`Sincronizado: ${deletedCount} registros eliminados con éxito en la nube.`, 'success');
+        }
+      } else {
+        triggerNotification(`Error: La base de datos en la nube no está disponible para borrar registros.`, 'error');
+      }
     } else {
       triggerNotification('No se encontraron registros anteriores para eliminar en este rango.', 'info');
     }
   };
 
-  // Cargar ingresos mensuales de forma asíncrona desde Capacitor Preferences
+  // Cargar ingresos mensuales de forma asíncrona desde Supabase
   useEffect(() => {
     const loadIncome = async () => {
-      const incomeKey = `monthly_income_${viewMonth}`;
-      try {
-        const { value } = await Preferences.get({ key: incomeKey });
-        if (value) {
-          setMonthlyIncome(parseFloat(value));
+      if (dbStatus.connected && dbStatus.tablesExist) {
+        const { income, error } = await fetchIncomeFromSupabase(viewMonth);
+        if (income !== null) {
+          setMonthlyIncome(income);
         } else {
-          // Valor por defecto inicial
-          setMonthlyIncome(1500000);
-          await Preferences.set({ key: incomeKey, value: '1500000' });
+          // Valor por defecto inicial si no existe en Supabase
+          setMonthlyIncome(0);
         }
-      } catch (e) {
-        // Fallback robusto a localStorage por si acaso
-        const saved = localStorage.getItem(incomeKey);
-        if (saved) {
-          setMonthlyIncome(parseFloat(saved));
-        } else {
-          setMonthlyIncome(1500000);
-          localStorage.setItem(incomeKey, '1500000');
-        }
+      } else {
+        setMonthlyIncome(0);
       }
     };
     loadIncome();
-  }, [viewMonth]);
+  }, [viewMonth, dbStatus.connected, dbStatus.tablesExist]);
 
-  // Función para actualizar y persistir los ingresos mensuales
+  // Función para actualizar y persistir los ingresos mensuales en la nube
   const handleUpdateIncome = async (newIncome: number) => {
-    setMonthlyIncome(newIncome);
-    const incomeKey = `monthly_income_${viewMonth}`;
-    try {
-      await Preferences.set({ key: incomeKey, value: newIncome.toString() });
-    } catch (e) {
-      localStorage.setItem(incomeKey, newIncome.toString());
+    if (!dbStatus.connected) {
+      triggerNotification('Error: La base de datos no está conectada.', 'error');
+      return;
+    }
+    if (!dbStatus.tablesExist) {
+      triggerNotification('Error: Falta crear la tabla "monthly_income". Abre el modal de configuración para ver el script.', 'error');
+      return;
+    }
+
+    const { success, error } = await saveIncomeToSupabase(viewMonth, newIncome);
+    if (success) {
+      setMonthlyIncome(newIncome);
+      triggerNotification('¡Ingreso mensual guardado con éxito!', 'success');
+    } else {
+      console.error('Error al guardar ingreso en base de datos:', error);
+      triggerNotification('Error al guardar el ingreso mensual: ' + error, 'error');
     }
   };
 
@@ -129,80 +176,99 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Cargar datos iniciales de localStorage
+  // Cargar datos iniciales de Supabase
+  const loadExpensesData = async () => {
+    if (dbStatus.connected && dbStatus.tablesExist) {
+      const { data, error } = await fetchExpensesFromSupabase();
+      if (data) {
+        setExpenses(data);
+        return;
+      } else if (error) {
+        console.error('Error al cargar de base de datos:', error);
+        triggerNotification('Error al obtener datos de la nube: ' + error, 'error');
+      }
+    }
+    setExpenses([]);
+  };
+
+  useEffect(() => {
+    if (!dbStatus.loading) {
+      loadExpensesData();
+    }
+  }, [dbStatus.loading, dbStatus.connected, dbStatus.tablesExist]);
+
+  // Limpiar todo almacenamiento local para garantizar que no queden registros ni residuos
   useEffect(() => {
     try {
-      const storedExpenses = localStorage.getItem('expenses');
-      if (storedExpenses) {
-        const parsed = JSON.parse(storedExpenses);
-        // Si contiene los registros semilla iniciales (que empiezan con 'exp-'), limpiamos para dejar la app vacía
-        if (Array.isArray(parsed) && parsed.some((exp: Expense) => exp.id && exp.id.startsWith('exp-'))) {
-          setExpenses([]);
-          localStorage.setItem('expenses', JSON.stringify([]));
-        } else {
-          setExpenses(parsed);
-        }
-      } else {
-        // Por defecto arranca completamente vacía
-        setExpenses([]);
-        localStorage.setItem('expenses', JSON.stringify([]));
-      }
+      localStorage.clear();
     } catch (e) {
-      console.error('Error al leer de localStorage:', e);
-      setExpenses([]);
+      console.error('Error clearing localStorage:', e);
     }
   }, []);
 
-  // Persistir cambios en localStorage cada vez que el estado cambie
-  const saveExpensesToStorage = (updatedExpenses: Expense[]) => {
-    setExpenses(updatedExpenses);
-    try {
-      localStorage.setItem('expenses', JSON.stringify(updatedExpenses));
-    } catch (e) {
-      console.error('Error al escribir en localStorage:', e);
+  // Acción para crear o actualizar un registro en la nube
+  const handleSaveExpense = async (formData: Omit<Expense, 'id'> & { id?: string }) => {
+    if (!dbStatus.connected) {
+      triggerNotification('Error: La base de datos no está conectada.', 'error');
+      return;
     }
-  };
-
-  // Acción para crear o actualizar un registro
-  const handleSaveExpense = (formData: Omit<Expense, 'id'> & { id?: string }) => {
-    let updated: Expense[];
-    
-    if (formData.id) {
-      // Editar registro existente
-      updated = expenses.map(exp => 
-        exp.id === formData.id 
-          ? { ...exp, amount: formData.amount, category: formData.category, date: formData.date, description: formData.description }
-          : exp
-      );
-      setExpenseToEdit(null); // Resetear edición
-      triggerNotification('¡Gasto actualizado con éxito!', 'success');
-    } else {
-      // Crear nuevo registro
-      const newExpense: Expense = {
-        id: `exp-${Date.now()}`,
-        amount: formData.amount,
-        category: formData.category,
-        date: formData.date,
-        description: formData.description
-      };
-      updated = [newExpense, ...expenses];
-      triggerNotification('¡Gasto registrado con éxito!', 'success');
+    if (!dbStatus.tablesExist) {
+      triggerNotification('Error: Falta crear la tabla "expenses". Abre el modal de configuración para ver el script SQL.', 'error');
+      return;
     }
 
-    saveExpensesToStorage(updated);
-    // Redirigir a la pestaña correspondiente
-    setCurrentTab('history');
-  };
+    const isEdit = !!formData.id;
+    const targetExpense: Expense = {
+      id: formData.id || `exp-${Date.now()}`,
+      amount: formData.amount,
+      category: formData.category,
+      date: formData.date,
+      description: formData.description
+    };
 
-  // Acción para eliminar un registro
-  const handleDeleteExpense = (id: string) => {
-    const updated = expenses.filter(exp => exp.id !== id);
-    saveExpensesToStorage(updated);
-    triggerNotification('El registro de gasto fue eliminado.', 'info');
-    
-    // Si estábamos editando el gasto eliminado, cancelar edición
-    if (expenseToEdit && expenseToEdit.id === id) {
+    const { success, error } = await saveExpenseToSupabase(targetExpense);
+    if (success) {
+      if (isEdit) {
+        setExpenses(expenses.map(exp => exp.id === targetExpense.id ? targetExpense : exp));
+        triggerNotification('¡Gasto actualizado con éxito!', 'success');
+      } else {
+        setExpenses([targetExpense, ...expenses]);
+        triggerNotification('¡Gasto registrado con éxito!', 'success');
+      }
+      loadExpensesData();
+      
+      // Redirigir a la pestaña correspondiente
       setExpenseToEdit(null);
+      setCurrentTab('history');
+    } else {
+      console.error('Error en base de datos:', error);
+      triggerNotification('Error al guardar el gasto: ' + error, 'error');
+    }
+  };
+
+  // Acción para eliminar un registro en la nube
+  const handleDeleteExpense = async (id: string) => {
+    if (!dbStatus.connected) {
+      triggerNotification('Error: La base de datos no está conectada.', 'error');
+      return;
+    }
+    if (!dbStatus.tablesExist) {
+      triggerNotification('Error: Falta crear la tabla "expenses" para poder eliminar.', 'error');
+      return;
+    }
+
+    const { success, error } = await deleteExpenseFromSupabase(id);
+    if (success) {
+      setExpenses(expenses.filter(exp => exp.id !== id));
+      triggerNotification('Gasto eliminado con éxito.', 'success');
+      
+      // Si estábamos editando el gasto eliminado, cancelar edición
+      if (expenseToEdit && expenseToEdit.id === id) {
+        setExpenseToEdit(null);
+      }
+    } else {
+      console.error('Error al eliminar en base de datos:', error);
+      triggerNotification('Error al eliminar el gasto: ' + error, 'error');
     }
   };
 
@@ -217,6 +283,7 @@ export default function App() {
     setExpenseToEdit(null);
     setCurrentTab('history');
   };
+
 
   return (
     <div className={`min-h-screen flex flex-col items-center justify-center py-0 sm:py-8 font-sans transition-colors duration-300 ${isDark ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-800'}`} id="main-app-container">
@@ -268,11 +335,40 @@ export default function App() {
             </div>
             <div>
               <h1 className={`text-sm font-black leading-none ${isDark ? 'text-white' : 'text-slate-900'}`}>MiBolsillo</h1>
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Contabilidad Offline</span>
+              <span className="text-[10px] text-emerald-500 font-extrabold uppercase tracking-wider">
+                {dbStatus.connected && dbStatus.tablesExist ? 'Nube Supabase' : 'Conectando Nube...'}
+              </span>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Supabase status indicator */}
+            <button
+              onClick={() => setShowDbModal(true)}
+              className={`flex items-center gap-1.5 text-[10px] py-1 px-2.5 rounded-full font-bold border transition-all hover:scale-105 active:scale-95 ${
+                dbStatus.loading
+                  ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 border-slate-200 dark:border-slate-700'
+                  : dbStatus.connected && dbStatus.tablesExist
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900/50'
+                  : dbStatus.connected
+                  ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-900/50'
+                  : 'bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 border-rose-200 dark:border-rose-900/50'
+              }`}
+              id="supabase-status-badge"
+              title="Configuración de base de datos Supabase"
+            >
+              <div className={`w-1.5 h-1.5 rounded-full ${
+                dbStatus.loading
+                  ? 'bg-slate-400 animate-pulse'
+                  : dbStatus.connected && dbStatus.tablesExist
+                  ? 'bg-emerald-500 animate-pulse'
+                  : dbStatus.connected
+                  ? 'bg-amber-500 animate-pulse'
+                  : 'bg-rose-500'
+              }`} />
+              <span>Supabase</span>
+            </button>
+
             {expenses.length > 0 && (
               <span className={`text-[10px] py-1 px-2 rounded-full font-bold border transition-colors ${
                 isDark 
@@ -287,6 +383,22 @@ export default function App() {
 
         {/* Cuerpo Principal Scrollable */}
         <main className="flex-1 overflow-y-auto px-5 py-4 pb-[calc(5.5rem+env(safe-area-inset-bottom,0px))] sm:pb-24 space-y-4" id="app-body-content">
+          {dbStatus.connected && !dbStatus.tablesExist && (
+            <div className={`p-4 rounded-3xl border flex items-start gap-3 animate-fade-in ${
+              isDark ? 'bg-amber-950/25 border-amber-900/40 text-amber-300 shadow-sm' : 'bg-amber-50/70 border-amber-200/60 text-amber-800 shadow-sm'
+            }`} id="missing-tables-warning-banner">
+              <div className="p-1.5 bg-amber-500 text-white rounded-xl shrink-0 mt-0.5 shadow-sm">
+                <CategoryIcon name="AlertTriangle" size={15} />
+              </div>
+              <div className="flex-1 space-y-1">
+                <h4 className="text-xs font-black">¡Falta configurar las Tablas en Supabase!</h4>
+                <p className="text-[10.5px] leading-relaxed opacity-95">
+                  La conexión con Supabase es correcta pero <strong>no se han creado las tablas requeridas</strong>. Por esto, los registros no se guardan permanentemente en la nube. Haz clic en el botón <strong className="underline cursor-pointer" onClick={() => setShowDbModal(true)}>Supabase</strong> arriba para copiar el script SQL y ejecutarlo en el panel de control de Supabase.
+                </p>
+              </div>
+            </div>
+          )}
+
           {currentTab === 'dashboard' && (
             <div className="animate-fade-in space-y-4">
               <Dashboard 
@@ -305,7 +417,7 @@ export default function App() {
             <div className="animate-fade-in space-y-4">
               <div className="flex justify-between items-center px-1">
                 <h2 className={`text-base font-black ${isDark ? 'text-white' : 'text-slate-900'}`}>Historial de Gastos</h2>
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Filtro offline</span>
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Filtros</span>
               </div>
               <ExpenseList
                 expenses={expenses}
@@ -340,6 +452,155 @@ export default function App() {
             </div>
           )}
         </main>
+
+        {/* Modal de Conexión de Base de Datos Supabase */}
+        {showDbModal && (
+          <div className="absolute inset-0 bg-slate-950/70 backdrop-blur-sm z-45 flex flex-col justify-end animate-fade-in" id="supabase-config-modal">
+            <div className={`w-full max-h-[85%] rounded-t-[32px] p-6 overflow-y-auto flex flex-col space-y-4 border-t transition-colors duration-300 shadow-2xl ${
+              isDark ? 'bg-slate-900 border-slate-800 text-white shadow-black/80' : 'bg-white border-slate-100 text-slate-800 shadow-slate-200/50'
+            }`}>
+              <div className="flex justify-between items-start">
+                <div>
+                  <h3 className="text-base font-black flex items-center gap-2">
+                    <CategoryIcon name="Database" className="text-emerald-500" size={18} />
+                    Base de Datos Supabase
+                  </h3>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Sincronización en la Nube</p>
+                </div>
+                <button 
+                  onClick={() => setShowDbModal(false)} 
+                  className={`p-1.5 rounded-full transition-colors ${isDark ? 'bg-slate-800 hover:bg-slate-750 text-slate-400' : 'bg-slate-100 hover:bg-slate-200 text-slate-500'}`}
+                >
+                  <CategoryIcon name="X" size={16} />
+                </button>
+              </div>
+
+              {/* Tarjeta de Estado */}
+              <div className={`p-4 rounded-2xl border flex flex-col gap-3 ${
+                dbStatus.loading
+                  ? 'bg-slate-100/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-800'
+                  : dbStatus.connected && dbStatus.tablesExist
+                  ? 'bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-100 dark:border-emerald-900/30'
+                  : dbStatus.connected
+                  ? 'bg-amber-50/50 dark:bg-amber-950/20 border-amber-100 dark:border-amber-900/30'
+                  : 'bg-rose-50/50 dark:bg-rose-950/20 border-rose-100 dark:border-rose-900/30'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Estado</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`w-2 h-2 rounded-full ${
+                      dbStatus.loading
+                        ? 'bg-slate-400 animate-pulse'
+                        : dbStatus.connected && dbStatus.tablesExist
+                        ? 'bg-emerald-500 animate-pulse'
+                        : dbStatus.connected
+                        ? 'bg-amber-500 animate-pulse'
+                        : 'bg-rose-500'
+                    }`} />
+                    <span className="text-xs font-black">
+                      {dbStatus.loading 
+                        ? 'Verificando...' 
+                        : dbStatus.connected && dbStatus.tablesExist 
+                        ? '¡Conectado y Listo!' 
+                        : dbStatus.connected 
+                        ? 'Conectado (Faltan Tablas)' 
+                        : 'Desconectado'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="text-xs leading-relaxed">
+                  {dbStatus.loading && <p className="text-slate-400">Comprobando la disponibilidad del servidor de Supabase...</p>}
+                  {!dbStatus.loading && dbStatus.connected && dbStatus.tablesExist && (
+                    <p className="text-emerald-600 dark:text-emerald-400 font-bold">
+                      Tu aplicación está conectada con éxito. Todos los gastos y presupuestos se están sincronizando en tiempo real con Supabase.
+                    </p>
+                  )}
+                  {!dbStatus.loading && dbStatus.connected && !dbStatus.tablesExist && (
+                    <p className="text-amber-600 dark:text-amber-400 font-bold">
+                      La conexión se estableció, pero no se encontraron las tablas "expenses" y/o "monthly_income". Ejecuta el script SQL de abajo en tu panel de Supabase.
+                    </p>
+                  )}
+                  {!dbStatus.loading && !dbStatus.connected && (
+                    <p className="text-rose-600 dark:text-rose-400 font-bold">
+                      No se pudo conectar. Error: {dbStatus.error || 'Credenciales inválidas'}. Asegúrate de configurar las variables correctamente.
+                    </p>
+                  )}
+                </div>
+
+                {/* Acciones de sincronización */}
+                {dbStatus.connected && dbStatus.tablesExist && (
+                  <div className="flex gap-2 pt-2 border-t border-slate-250 dark:border-slate-800">
+                    <button
+                      onClick={checkSupabase}
+                      className={`w-full py-2.5 px-3 border font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 active:scale-95 transition-transform ${
+                        isDark ? 'border-slate-700 bg-slate-800 hover:bg-slate-750 text-white' : 'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
+                      }`}
+                      title="Refrescar estado"
+                    >
+                      <CategoryIcon name="RefreshCw" size={13} />
+                      Refrescar Estado de la Conexión
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Script de Creación de Tablas SQL (para cuando falta la tabla) */}
+              {!dbStatus.loading && dbStatus.connected && !dbStatus.tablesExist && (
+                <div className="flex flex-col space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-bold text-slate-400">Instrucciones de Instalación:</span>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(SQL_CREATION_SCRIPT);
+                        triggerNotification('¡Script SQL copiado!', 'success');
+                      }}
+                      className="text-[10px] py-1 px-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold flex items-center gap-1"
+                    >
+                      <CategoryIcon name="Copy" size={12} />
+                      Copiar SQL
+                    </button>
+                  </div>
+                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 overflow-x-auto max-h-[150px]">
+                    <pre className="text-[10px] font-mono text-emerald-400 whitespace-pre-wrap leading-tight select-all">
+                      {SQL_CREATION_SCRIPT}
+                    </pre>
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-normal">
+                    Paso: Ve a tu proyecto en <strong>Supabase</strong> -&gt; <strong>SQL Editor</strong> -&gt; <strong>New Query</strong>, pega el código de arriba y presiona <strong>Run</strong>. Después de correrlo, haz clic en verificar.
+                  </p>
+                  <button
+                    onClick={checkSupabase}
+                    className="w-full py-2.5 bg-emerald-650 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 shadow-sm active:scale-95 transition-transform animate-pulse"
+                  >
+                    <CategoryIcon name="RefreshCw" size={14} />
+                    Verificar conexión de tablas
+                  </button>
+                </div>
+              )}
+
+              {/* Botón de reintento para Desconectado */}
+              {!dbStatus.loading && !dbStatus.connected && (
+                <button
+                  onClick={checkSupabase}
+                  className="w-full py-2.5 bg-slate-800 hover:bg-slate-750 text-white font-bold text-xs rounded-xl border border-slate-700 flex items-center justify-center gap-1.5 active:scale-95 transition-transform"
+                >
+                  <CategoryIcon name="RefreshCw" size={14} />
+                  Reintentar Conexión
+                </button>
+              )}
+
+              <button
+                onClick={() => setShowDbModal(false)}
+                className={`w-full py-2.5 text-xs font-bold rounded-xl transition-all border ${
+                  isDark ? 'bg-slate-800 border-slate-700 hover:bg-slate-750 text-white' : 'bg-slate-100 border-slate-200 hover:bg-slate-200 text-slate-700'
+                }`}
+              >
+                Cerrar Panel
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Barra de Navegación Inferior */}
         <nav 
@@ -441,20 +702,20 @@ export default function App() {
       }`}>
         <div className={`flex items-center gap-1.5 border-b pb-3 ${isDark ? 'border-slate-800' : 'border-slate-150'}`}>
           <CategoryIcon name="Sparkles" className="text-emerald-500" size={16} />
-          <h3 className={`font-bold text-sm ${isDark ? 'text-white' : 'text-slate-800'}`}>Persistencia y Datos Offline</h3>
+          <h3 className={`font-bold text-sm ${isDark ? 'text-white' : 'text-slate-800'}`}>Sincronización en la Nube</h3>
         </div>
         <p>
-          Esta aplicación está diseñada con una arquitectura <strong>totalmente local</strong> que guarda la información en el almacenamiento local seguro del dispositivo. En tu entorno web interactivo, utiliza <code>localStorage</code>, lo cual preserva de forma permanente tus gastos incluso si recargas el navegador o closes la pestaña.
+          Esta aplicación ahora cuenta con una integración completa con <strong>Supabase</strong>. Tus gastos e ingresos mensuales están sincronizados y respaldados en la nube de manera segura.
         </p>
         <p>
-          Si llevas este código a un entorno móvil nativo, te recomendamos <strong>React Native</strong> o <strong>Expo</strong>, ya que te permitirán reutilizar casi todo este código React y migrar la persistencia de forma idéntica con el módulo oficial de <code>@react-native-async-storage/async-storage</code>.
+          Puedes usar el botón <strong>Supabase</strong> en la barra superior para ver el estado de tu conexión, migrar registros antiguos, o verificar que las tablas necesarias estén correctamente creadas.
         </p>
         <div className={`p-3 rounded-2xl border flex gap-2 ${
           isDark ? 'bg-slate-950/40 border-slate-800/50' : 'bg-slate-50 border-slate-100/50'
         }`}>
           <CategoryIcon name="Info" size={14} className="text-slate-400 shrink-0 mt-0.5" />
           <p className={`text-[10px] leading-normal ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-            <strong>Consejo:</strong> Agrega gastos, filtra por categorías y edítalos desde las pestañas inferiores del móvil simulador. ¡Cambia el tema con el botón de sol/luna en la barra de navegación inferior!
+            <strong>Consejo:</strong> Haz clic en el badge <strong>Supabase</strong> del smartphone simulado para acceder al panel de administración de sincronización.
           </p>
         </div>
       </div>

@@ -33,7 +33,12 @@ import {
   PlusCircle,
   HelpCircle,
   ArrowUpRight,
-  ArrowDownRight
+  ArrowDownRight,
+  Database,
+  Copy,
+  RefreshCw,
+  AlertTriangle,
+  CloudLightning
 } from 'lucide-react';
 
 interface CategoryIconProps {
@@ -102,6 +107,16 @@ export const CategoryIcon: React.FC<CategoryIconProps> = ({ name, className = ''
       return <ArrowUpRight className={className} size={size} />;
     case 'ArrowDownRight':
       return <ArrowDownRight className={className} size={size} />;
+    case 'Database':
+      return <Database className={className} size={size} />;
+    case 'Copy':
+      return <Copy className={className} size={size} />;
+    case 'RefreshCw':
+      return <RefreshCw className={className} size={size} />;
+    case 'AlertTriangle':
+      return <AlertTriangle className={className} size={size} />;
+    case 'CloudLightning':
+      return <CloudLightning className={className} size={size} />;
     default:
       return <HelpCircle className={className} size={size} />;
   }
